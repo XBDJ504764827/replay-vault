@@ -3,6 +3,8 @@
 #include <SteamWorks>
 
 #include <gokz/core>
+#include <gokz/jumpstats>
+#include <gokz/anticheat>
 #include <gokz/replays>
 
 #include <autoexecconfig>
@@ -67,7 +69,7 @@ public void GOKZ_DB_OnJumpstatPB(int client, int jumptype, int mode, float dista
     RV_OnJumpstatPB(client, jumptype, mode, distance, block, strafes, sync, pre, max, airtime);
 }
 
-public void GOKZ_AC_OnPlayerSuspected(int client, int reason)
+public void GOKZ_AC_OnPlayerSuspected(int client, ACReason reason, const char[] notes, const char[] stats)
 {
-    RV_OnCheaterSuspected(client, reason);
+    RV_OnCheaterSuspected(client, view_as<int>(reason));
 }

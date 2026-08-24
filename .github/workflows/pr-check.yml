@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VER="$(grep -E '#define REPLAY_VAULT_VERSION' addons/sourcemod/scripting/include/replay-vault/version.inc | sed -E 's/.*"([^"]+)".*/\1/')"
+          VER="$(grep -E '#define REPLAY_VAULT_VERSION "' addons/sourcemod/scripting/include/replay-vault/version.inc | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
           if [ -z "$VER" ]; then echo "Failed to parse REPLAY_VAULT_VERSION"; cat addons/sourcemod/scripting/include/replay-vault/version.inc; exit 1; fi
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
           SHORT="$(echo "$GITHUB_SHA" | cut -c1-7)"

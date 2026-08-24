@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        run: |
+          VER=$(grep -E '#define REPLAY_VAULT_VERSION' addons/sourcemod/scripting/include/replay-vault/version.inc | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+          if [ -z "$VER" ]; then
+            echo "Failed to parse REPLAY_VAULT_VERSION from version.inc"
+            cat addons/sourcemod/scripting/include/replay-vault/version.inc
+            exit 1
+          fi
+          TAG="v${VER}"
+          echo "version=${VER}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Resolved version: ${VER} tag: ${TAG}"
+          # Fail if tag already exists (require bump in develop before merge)
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists. Bump REPLAY_VAULT_VERSION in version.inc on develop before merging."
+            exit 1
+          fi
+
+      - name: Setup SourceMod + GOKZ includes
+        run: ./build.sh setup
+
+      - name: Strict compile
+        run: STRICT=1 ./build.sh
+        env:
+          STRICT: "1"
+
+      - name: Package Release
+        run: |
+          VER="${{ steps.version.outputs.version }}"
+          ZIP="replay-vault-v${VER}.zip"
+          zip -r "$ZIP" \
+            addons/sourcemod/plugins/replay-vault.smx \
+            addons/sourcemod/translations/replay-vault.phrases.txt \
+            cfg/sourcemod/replay-vault.cfg \
+            README.md
+          ls -lh "$ZIP"
+          echo "ZIP=$ZIP" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: ${{ env.ZIP }}
+          fail_on_unmatched_files: true
+
+      - name: Summary
+        run: |
+          echo "### Release ${{ steps.version.outputs.tag }} published" >> $GITHUB_STEP_SUMMARY
+          echo "Artifact: ${{ env.ZIP }}" >> $GITHUB_STEP_SUMMARY

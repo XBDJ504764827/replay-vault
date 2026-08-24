@@ -1,0 +1,61 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main]
+
+# Only build PRs from develop → main (per project branching model)
+# Other PRs are ignored without failure so they don't block the queue.
+jobs:
+  pr-check:
+    if: github.head_ref == 'develop'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup SourceMod + GOKZ includes
+        run: ./build.sh setup
+
+      - name: Strict compile check (STRICT=1)
+        run: STRICT=1 ./build.sh
+        env:
+          STRICT: "1"
+
+      - name: Verify single SMX
+        run: |
+          test -f addons/sourcemod/plugins/replay-vault.smx
+          ls -lh addons/sourcemod/plugins/replay-vault.smx
+          count=$(ls addons/sourcemod/plugins/*.smx 2>/dev/null | wc -l)
+          if [ "$count" -ne 1 ]; then
+            echo "Expected exactly 1 smx, got $count"
+            ls -lh addons/sourcemod/plugins/
+            exit 1
+          fi
+
+      - name: Package PR test artifact
+        run: |
+          PR_NUM="${{ github.event.number }}"
+          ZIP="replay-vault-pr${PR_NUM}.zip"
+          zip -r "$ZIP" \
+            addons/sourcemod/plugins/replay-vault.smx \
+            addons/sourcemod/translations/replay-vault.phrases.txt \
+            cfg/sourcemod/replay-vault.cfg \
+            README.md
+          ls -lh "$ZIP"
+
+      - name: Upload PR test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-vault-pr${{ github.event.number }}
+          path: replay-vault-pr${{ github.event.number }}.zip
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          echo "### PR Check Passed" >> $GITHUB_STEP_SUMMARY
+          echo "Strict compile OK. Test package: replay-vault-pr${{ github.event.number }}.zip" >> $GITHUB_STEP_SUMMARY
+          echo "Download from Artifacts, extract and merge addons/cfg to server root for testing." >> $GITHUB_STEP_SUMMARY

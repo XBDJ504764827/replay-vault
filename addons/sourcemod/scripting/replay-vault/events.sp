@@ -9,11 +9,11 @@ void RV_OnMapStart()
 void RV_OnReplaySaved(int client, int replayType, const char[] map,
     int course, int timeType, float time, const char[] filePath, bool tempReplay)
 {
+    if (tempReplay) {}
     // Only runs use this forward in current gokz-replays (recording.sp SaveRecordingOfRun).
     // We upload ALL runs that hit disk, including tempRuns (tempReplay==true).
     if (replayType != ReplayType_Run) return;
     if (filePath[0] == '\0') return;
-    // filePath may be "" if gokz-replays failed to save; check existence via staged copy later
     RV_HandleRun(client, map, course, timeType, time, filePath);
 }
 
@@ -21,25 +21,28 @@ void RV_HandleRun(int client, const char[] map, int course, int timeType, float 
 {
     if (!RV_CanUpload()) return;
 
-    // Normalize map lower
     char mapLower[64];
-    if (map[0] != '\0') RV_ToLower(map, mapLower, sizeof(mapLower));
-    else strcopy(mapLower, sizeof(mapLower), gC_CurrentMap);
+    if (map[0] != '\0')
+    {
+        RV_SanitizeMap(map, mapLower, sizeof(mapLower));
+    }
+    else
+    {
+        strcopy(mapLower, sizeof(mapLower), gC_CurrentMap);
+    }
     if (mapLower[0] == '\0')
     {
         char cur[64];
         GetCurrentMapDisplayName(cur, sizeof(cur));
-        RV_ToLower(cur, mapLower, sizeof(mapLower));
+        RV_SanitizeMap(cur, mapLower, sizeof(mapLower));
     }
 
-    // Validate course
     if (course < 0 || course >= GOKZ_MAX_COURSES)
     {
         LogError("[replay-vault] Invalid course %d for run %s, skip", course, filePath);
         return;
     }
 
-    // Mode from client's current mode (most reliable for key); fallback to forward style if needed
     int mode = Mode_KZTimer;
     if (IsValidClient(client)) mode = GOKZ_GetCoreOption(client, Option_Mode);
     if (mode < 0 || mode >= MODE_COUNT) mode = Mode_KZTimer;
@@ -54,7 +57,6 @@ void RV_HandleRun(int client, const char[] map, int course, int timeType, float 
     if (IsValidClient(client)) hasSid = RV_GetSteamID64(client, steamid64, sizeof(steamid64));
     if (!hasSid)
     {
-        // Try to parse from filePath fallback or skip
         LogError("[replay-vault] Cannot get SteamID64 for client %d course %d map %s, skip upload", client, course, mapLower);
         return;
     }
@@ -81,13 +83,16 @@ void RV_HandleRun(int client, const char[] map, int course, int timeType, float 
     RV_UploadFile(stagingPath, key, uuid, mapLower, course, steamid64, modeStr, timetypeStr, date, timeMs, userId);
 }
 
-// Jumps fallback: GOKZ_DB_OnJumpstatPB is called on new jump PB; gokz-replays saves jump replay 2s later.
-// We delay scan to catch the file.
 void RV_OnJumpstatPB(int client, int jumptype, int mode, float distance, int block, int strafes, float sync, float pre, float max, int airtime)
 {
+    if (distance < -1.0) LogMessage("[replay-vault] dbg jump distance %f", distance);
+    if (strafes < -1) LogMessage("[replay-vault] dbg strafes %d", strafes);
+    if (sync < -1.0) LogMessage("[replay-vault] dbg sync %f", sync);
+    if (pre < -1.0) LogMessage("[replay-vault] dbg pre %f", pre);
+    if (max < -1.0) LogMessage("[replay-vault] dbg max %f", max);
+    if (airtime < -1) LogMessage("[replay-vault] dbg airtime %d", airtime);
     if (!RV_CanUpload()) return;
     if (!IsValidClient(client)) return;
-    // Delay 2.5s to let recording.sp SaveRecordingOfJump finish (RP_PLAYBACK_BREATHER_TIME=2.0)
     DataPack dp = new DataPack();
     dp.WriteCell(GetClientUserId(client));
     dp.WriteCell(jumptype);
@@ -118,10 +123,9 @@ public Action Timer_ScanJump(Handle timer, DataPack dp)
     {
         char cur[64];
         GetCurrentMapDisplayName(cur, sizeof(cur));
-        RV_ToLower(cur, mapLower, sizeof(mapLower));
+        RV_SanitizeMap(cur, mapLower, sizeof(mapLower));
     }
 
-    // Scan data/gokz-replays/_jumps/<accountID>/ for newest file matching this jump
     int accountID = GetSteamAccountID(client);
     char dir[PLATFORM_MAX_PATH];
     BuildPath(Path_SM, dir, sizeof(dir), "data/gokz-replays/_jumps/%d", accountID);
@@ -135,12 +139,9 @@ public Action Timer_ScanJump(Handle timer, DataPack dp)
     FileType ftype;
     while (dl.GetNext(entry, sizeof(entry), ftype))
     {
-        if (ftype != FileType_File) continue;
-        // Also check blocks subdirectory
         if (StrEqual(entry, ".") || StrEqual(entry, "..")) continue;
         char full[PLATFORM_MAX_PATH];
         FormatEx(full, sizeof(full), "%s/%s", dir, entry);
-        // If entry is directory "blocks", scan inside
         if (DirExists(full))
         {
             DirectoryListing dl2 = OpenDirectory(full);
@@ -151,6 +152,7 @@ public Action Timer_ScanJump(Handle timer, DataPack dp)
                 while (dl2.GetNext(e2, sizeof(e2), ft2))
                 {
                     if (ft2 != FileType_File) continue;
+                    if (StrEqual(e2, ".") || StrEqual(e2, "..")) continue;
                     char full2[PLATFORM_MAX_PATH];
                     FormatEx(full2, sizeof(full2), "%s/%s", full, e2);
                     int mtime = GetFileTime(full2, FileTime_LastChange);
@@ -164,6 +166,7 @@ public Action Timer_ScanJump(Handle timer, DataPack dp)
             }
             continue;
         }
+        if (ftype != FileType_File) continue;
         int mtime = GetFileTime(full, FileTime_LastChange);
         if (mtime > latestTime)
         {
@@ -174,17 +177,17 @@ public Action Timer_ScanJump(Handle timer, DataPack dp)
     delete dl;
 
     if (latestPath[0] == '\0') return Plugin_Stop;
-    // Only upload if file is recent (within 10s)
     if (GetTime() - latestTime > 10) return Plugin_Stop;
 
     char modeStr[16];
     RV_ModeToString(mode, modeStr, sizeof(modeStr));
 
-    // Jump type id -> name (reuse gokz jumpstats names if available, fallback to id string)
+    // Prefer human-readable jump type key (longjump/bhop/...) for key readability
     char jumpName[32];
-    FormatEx(jumpName, sizeof(jumpName), "%d", jumptype);
-    // Try to resolve via gokz jump type names if plugin exposes them; keep id string otherwise
-    // For key we lower it anyway
+    if (jumptype >= 0 && jumptype < JUMPTYPE_COUNT)
+        strcopy(jumpName, sizeof(jumpName), gC_JumpTypeKeys[jumptype]);
+    else
+        FormatEx(jumpName, sizeof(jumpName), "%d", jumptype);
 
     char date[RV_MAX_DATE_LENGTH];
     RV_FormatDate(GetTime(), date, sizeof(date));
@@ -192,11 +195,9 @@ public Action Timer_ScanJump(Handle timer, DataPack dp)
     RV_GenerateUUID(uuid, sizeof(uuid));
 
     char key[RV_MAX_KEY_LENGTH];
-    // Check if path contains /blocks/ to extract block number from filename
     int actualBlock = block;
     if (StrContains(latestPath, "/blocks/") != -1 && actualBlock == 0)
     {
-        // Try to parse block from filename like "1_240_KZT_NRM.replay" - second part is block
         char fname[PLATFORM_MAX_PATH];
         int lastSlash = -1;
         for (int i = 0; latestPath[i] != '\0'; i++) if (latestPath[i] == '/') lastSlash = i;
@@ -233,11 +234,11 @@ public Action Timer_ScanCheater(Handle timer, DataPack dp)
 {
     dp.Reset();
     int userId = dp.ReadCell();
-    int reason = dp.ReadCell();
+    int reasonInt = dp.ReadCell();
+    ACReason reason = view_as<ACReason>(reasonInt);
     delete dp;
 
     int client = GetClientOfUserId(userId);
-    // Client may have been kicked; still try by userId fallback via accountID scan
     char steamid64[32];
     int accountID = 0;
     if (IsValidClient(client))
@@ -247,7 +248,6 @@ public Action Timer_ScanCheater(Handle timer, DataPack dp)
     }
     else
     {
-        // Cannot resolve without client; skip
         return Plugin_Stop;
     }
 
@@ -257,14 +257,13 @@ public Action Timer_ScanCheater(Handle timer, DataPack dp)
     {
         char cur[64];
         GetCurrentMapDisplayName(cur, sizeof(cur));
-        RV_ToLower(cur, mapLower, sizeof(mapLower));
+        RV_SanitizeMap(cur, mapLower, sizeof(mapLower));
     }
 
     char dir[PLATFORM_MAX_PATH];
     BuildPath(Path_SM, dir, sizeof(dir), "data/gokz-replays/_cheaters");
     if (!DirExists(dir)) return Plugin_Stop;
 
-    // Find newest file for this accountID prefix
     char latestPath[PLATFORM_MAX_PATH];
     int latestTime = 0;
     char prefix[32];
@@ -297,7 +296,10 @@ public Action Timer_ScanCheater(Handle timer, DataPack dp)
     RV_ModeToString(mode, modeStr, sizeof(modeStr));
 
     char reasonStr[64];
-    FormatEx(reasonStr, sizeof(reasonStr), "%d", reason);
+    if (reason >= ACReason_BhopMacro && reason < ACREASON_COUNT)
+        strcopy(reasonStr, sizeof(reasonStr), gC_ACReasons[reason]);
+    else
+        FormatEx(reasonStr, sizeof(reasonStr), "%d", reason);
 
     char date[RV_MAX_DATE_LENGTH];
     RV_FormatDate(GetTime(), date, sizeof(date));
@@ -316,9 +318,4 @@ public Action Timer_ScanCheater(Handle timer, DataPack dp)
 
     RV_UploadFile(stagingPath, key, uuid, mapLower, -1, steamid64, modeStr, "cheat", date, 0, userId);
     return Plugin_Stop;
-}
-
-bool IsValidClient(int client)
-{
-    return client > 0 && client <= MaxClients && IsClientInGame(client);
 }

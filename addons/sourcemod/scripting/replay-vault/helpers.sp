@@ -12,12 +12,9 @@ void RV_OnMapStart_Helpers()
     GetCurrentMapDisplayName(map, sizeof(map));
     RV_ToLower(map, gC_CurrentMap, sizeof(gC_CurrentMap));
     // Ensure staging dir
-    char path[PLATFORM_MAX_PATH];
-    BuildPath(Path_SM, path, sizeof(path), RV_STAGING_DIR);
-    if (!DirExists(path)) CreateDirectory(path, 511);
+    RV_EnsureDir(RV_STAGING_DIR);
 }
 
-// Lowercase in-place
 void RV_ToLower(const char[] input, char[] output, int maxlen)
 {
     int len = strlen(input);
@@ -31,33 +28,72 @@ void RV_ToLower(const char[] input, char[] output, int maxlen)
     output[len] = '\0';
 }
 
-// course 0 -> main, 1 -> b1 ...
 void RV_CourseToString(int course, char[] buf, int maxlen)
 {
     if (course == 0) strcopy(buf, maxlen, "main");
     else FormatEx(buf, maxlen, "b%d", course);
 }
 
-// Mode id -> kzt/skz/vnl lower
 void RV_ModeToString(int mode, char[] buf, int maxlen)
 {
+    if (mode < 0 || mode >= MODE_COUNT)
+    {
+        strcopy(buf, maxlen, "kzt");
+        return;
+    }
     char tmp[16];
     strcopy(tmp, sizeof(tmp), gC_ModeNamesShort[mode]);
     RV_ToLower(tmp, buf, maxlen);
 }
 
-// TimeType -> pro/nub lower
 void RV_TimeTypeToString(int timeType, char[] buf, int maxlen)
 {
+    if (timeType < 0 || timeType >= TIMETYPE_COUNT)
+    {
+        strcopy(buf, maxlen, "pro");
+        return;
+    }
     char tmp[16];
     strcopy(tmp, sizeof(tmp), gC_TimeTypeNames[timeType]);
     RV_ToLower(tmp, buf, maxlen);
 }
 
-// GetTime() -> yyyy.MM.dd.HH.mm.ss (server localtime; doc notes Beijing if server is CST/UTC+8)
+// GetTime() -> yyyy.MM.dd.HH.mm.ss (Beijing +8h via +28800; FormatTime is GMT when 2nd arg omitted on Linux)
+// We add 8h offset explicitly so yyyy matches Beijing regardless of server TZ.
 void RV_FormatDate(int timestamp, char[] buf, int maxlen)
 {
-    FormatTime(buf, maxlen, "%Y.%m.%d.%H.%M.%S", timestamp);
+    int beijing = timestamp + 8 * 3600;
+    FormatTime(buf, maxlen, "%Y.%m.%d.%H.%M.%S", beijing);
+}
+
+// Map sanitize: lower, '/' -> '_' , keep a-z0-9_- .
+void RV_SanitizeMap(const char[] input, char[] output, int maxlen)
+{
+    char lower[64];
+    RV_ToLower(input, lower, sizeof(lower));
+    int out = 0;
+    for (int i = 0; lower[i] != '\0' && out < maxlen - 1; i++)
+    {
+        char c = lower[i];
+        if (c == '/') c = '_';
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+        {
+            output[out++] = c;
+        }
+        else
+        {
+            output[out++] = '_';
+        }
+    }
+    output[out] = '\0';
+}
+
+bool RV_EnsureDir(const char[] dir)
+{
+    char path[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, path, sizeof(path), "%s", dir);
+    if (DirExists(path)) return true;
+    return CreateDirectory(path, 511);
 }
 
 // Build run key: {map}/runs/{course}/{steamid64}/{mode}/{timetype}/{date}_{uuid}.replay
@@ -95,17 +131,61 @@ void RV_BuildCheaterKey(const char[] map, const char[] steamid64, const char[] m
         map, steamid64, mode, reasonLower, date, uuid);
 }
 
-bool RV_GetSteamID64(int client, char[] buf, int maxlen)
+// Parse run filename {course}_{MODE}_{STYLE}_{TIMETYPE}.replay -> course/modeShort/timetype (fallback)
+stock bool RV_ParseRunFileName(const char[] fileName, int &course, char[] modeShort, int modeShortLen, char[] typeStr, int typeStrLen)
 {
-    if (GetClientAuthId(client, AuthId_SteamID64, buf, maxlen)) return buf[0] != '\0';
-    int acc = GetSteamAccountID(client);
-    if (acc == 0) return false;
-    // Fallback: compose via accountID (rare, GetClientAuthId should succeed after auth)
-    FormatEx(buf, maxlen, "%d", acc);
-    return false;
+    char buf[PLATFORM_MAX_PATH];
+    strcopy(buf, sizeof(buf), fileName);
+    int dot = StrContains(buf, ".replay");
+    if (dot == -1) return false;
+    buf[dot] = '\0';
+    char parts[4][16];
+    int n = ExplodeString(buf, "_", parts, sizeof(parts), sizeof(parts[]));
+    if (n < 4) return false;
+    course = StringToInt(parts[0]);
+    strcopy(modeShort, modeShortLen, parts[1]);
+    RV_ToLower(modeShort, modeShort, modeShortLen);
+    if (StrEqual(parts[3], "PRO", false)) strcopy(typeStr, typeStrLen, "pro");
+    else strcopy(typeStr, typeStrLen, "nub");
+    return true;
 }
 
-// Resolve source path: handle Path_SM-relative vs game-dir-relative (addons/...)
+bool RV_GetSteamID64(int client, char[] buf, int maxlen)
+{
+    if (GetClientAuthId(client, AuthId_SteamID64, buf, maxlen) && buf[0] != '\0')
+    {
+        return true;
+    }
+    int acc = GetSteamAccountID(client);
+    if (acc == 0) return false;
+    // Fallback: base 76561197960265728 + accountID via string addition (cells are 32-bit, cannot hold 64-bit)
+    char base[] = "76561197960265728";
+    char accStr[16];
+    IntToString(acc, accStr, sizeof(accStr));
+    // Add base + accStr as decimal strings
+    int i = strlen(base) - 1;
+    int j = strlen(accStr) - 1;
+    int carry = 0;
+    char rev[32];
+    int pos = 0;
+    while (i >= 0 || j >= 0 || carry)
+    {
+        int da = (i >= 0) ? (base[i] - '0') : 0;
+        int db = (j >= 0) ? (accStr[j] - '0') : 0;
+        int sum = da + db + carry;
+        rev[pos++] = (sum % 10) + '0';
+        carry = sum / 10;
+        i--; j--;
+    }
+    // reverse
+    for (int k = 0; k < pos; k++)
+    {
+        buf[k] = rev[pos - 1 - k];
+    }
+    buf[pos] = '\0';
+    return buf[0] != '\0';
+}
+
 static bool RV_ResolveSourcePath(const char[] source, char[] output, int maxlength)
 {
     if (source[0] == '/' || (source[1] == ':' && ((source[0] >= 'A' && source[0] <= 'Z') || (source[0] >= 'a' && source[0] <= 'z'))))
@@ -161,13 +241,11 @@ bool RV_FileCopy(const char[] source, const char[] destination)
     return true;
 }
 
-// Build staging path: data/replay-vault/staging/{uuid}.replay (with counter dedup)
 bool RV_StageFile(const char[] source, const char[] uuid, char[] stagingPath, int maxlen)
 {
     char dir[PLATFORM_MAX_PATH];
     BuildPath(Path_SM, dir, sizeof(dir), RV_STAGING_DIR);
     if (!DirExists(dir)) CreateDirectory(dir, 511);
-    // Use uuid directly; counter only if collision (should not happen)
     FormatEx(stagingPath, maxlen, "%s/%s.replay", dir, uuid);
     if (FileExists(stagingPath))
     {

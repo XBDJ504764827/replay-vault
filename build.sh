@@ -58,14 +58,20 @@ if [[ ! -x "$SPCOMP" ]]; then
   exit 1
 fi
 
-# 编译依赖 include：本地 include/ 优先；否则从 gokz 仓库拉取（CI/新环境）
+# 编译依赖 include：项目 include + GOKZ/SteamWorks 等外部 include 均需加入
+INC_PATHS=()
 if [ -d "addons/sourcemod/scripting/include" ]; then
-  INC_PATHS=(-i=addons/sourcemod/scripting/include)
-else
-  if [ ! -d "$DEPS_INCLUDE" ]; then
-    "$0" deps
-  fi
-  INC_PATHS=(-i="$DEPS_INCLUDE")
+  INC_PATHS+=(-i=addons/sourcemod/scripting/include)
+fi
+if [ ! -d "$DEPS_INCLUDE" ]; then
+  "$0" deps
+fi
+if [ -d "$DEPS_INCLUDE" ]; then
+  INC_PATHS+=(-i="$DEPS_INCLUDE")
+fi
+if [ ${#INC_PATHS[@]} -eq 0 ]; then
+  echo "No include paths found (neither addons/sourcemod/scripting/include nor $DEPS_INCLUDE)"
+  exit 1
 fi
 
 mkdir -p addons/sourcemod/plugins

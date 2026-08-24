@@ -1,18 +1,19 @@
 # replay-vault
 
-CS:GO GOKZ 全量录像备份插件 — 只要 `gokz-replays` 落盘（完成 / 跳远 / 作弊）就异步上传到 Cloudflare R2（Worker 中转），按 `UUID` 命名永不覆盖，完成即在聊天框回显 `UUID` 供玩家按 `UUID` 检索下载。
+CS:GO GOKZ 落盘录像备份插件 — `gokz-replays` 只要落盘（完成：破纪录 + 破 PB 未破纪录，含 Bonus/NUB-PRO；跳远/作弊）就异步上传到 Cloudflare R2（Worker 中转），按 `UUID` 命名，比 PB 慢的不落盘不上传，完成即在聊天框回显 `UUID` 供玩家按 `UUID` 检索下载，R2 侧 3 天自动删除。
 
-> 与 `stratosphere` 区分：`stratosphere` 仅备份 `WR`（`wr/{mode}/{map}/{tp|pro}.replay` 最快者胜覆盖），`replay-vault` 是**全量备份**（`{map}/runs|jumps|cheaters/.../{date}_{uuid}.replay` 每份独立）。
+> 与 `stratosphere` 区分：`stratosphere` 仅备份 `WR`（`wr/{mode}/{map}/{tp|pro}.replay` 最快者胜覆盖），`replay-vault` 是**落盘即备份**（`{map}/runs|jumps|cheaters/.../{date}_{uuid}.replay` 每份独立，3 天生命周期）。
 
 ## 特性
 
-- 📦 **全量上传**：完成录像（含未破 PB / Bonus / NUB/PRO）+ 跳远录像 + 作弊录像，只要落盘就上传
+- 📦 **落盘即上传**：完成录像（破纪录 + 破 PB 未破纪录，含 Bonus/NUB-PRO，比 PB 慢的不落盘不上传）+ 跳远/作弊录像，只要落盘就上传，零改上游
 - 🗺️ **地图置顶键名**：`kz_map/runs/main/{steamid64}/kzt/pro/{date}_{uuid}.replay`，便于按图/人前缀查询
 - 🔑 **UUID 命名**：插件端 `UUIDv4` 生成，`X-UUID` 传 Worker，文件名为 `年.月.日.时.分.秒_uuid.replay`（北京时间，点分隔）
 - 💬 **聊天回显**：完成录像上传成功后向完成者回显 `录像已上传 UUID: xxxxxxxx-...`
 - 🛡️ **竞态防护**：上传前同步复制到 `data/replay-vault/staging/{uuid}.replay`，源文件被 `gokz-global` 删除不影响
 - 🔐 **Worker 中转**：`SteamWorks` + `X-API-Key` + 可选 `X-SHA256`，不在 `Pawn` 层做 `R2` 签名
 - 🧱 **单一 SMX**：`replay-vault.sp` + `replay-vault/` 模块目录，仅产出一个 `replay-vault.smx`
+- ⏰ **3 天生命周期**：R2 `Lifecycle Expiration 3 days` + D1 每日 Cron 清理过期 `uuid→key`，到期自动删除
 - 🔇 **纯后台**：无命令、无菜单
 
 ## 键名约定

@@ -1,6 +1,10 @@
 // upload.sp - SteamWorks POST to Worker (Worker relay, no R2 signing in Pawn)
 
-#define RV_HTTP_TIMEOUT 60
+int RV_GetTimeoutSeconds()
+{
+    if (gCV_Timeout != null) return gCV_Timeout.IntValue;
+    return 60;
+}
 
 void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid,
     const char[] map, int course, const char[] steamid64, const char[] mode,
@@ -31,8 +35,9 @@ void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid
         return;
     }
 
-    SteamWorks_SetHTTPRequestNetworkActivityTimeout(hRequest, RV_HTTP_TIMEOUT);
-    SteamWorks_SetHTTPRequestAbsoluteTimeoutMS(hRequest, RV_HTTP_TIMEOUT * 1000);
+    int timeoutSec = RV_GetTimeoutSeconds();
+    SteamWorks_SetHTTPRequestNetworkActivityTimeout(hRequest, timeoutSec);
+    SteamWorks_SetHTTPRequestAbsoluteTimeoutMS(hRequest, timeoutSec * 1000);
     SteamWorks_SetHTTPRequestHeaderValue(hRequest, "X-API-Key", apiKey);
     SteamWorks_SetHTTPRequestHeaderValue(hRequest, "X-UUID", uuid);
     SteamWorks_SetHTTPRequestHeaderValue(hRequest, "X-Key", key);
@@ -73,7 +78,7 @@ void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid
     SteamWorks_SetHTTPCallbacks(hRequest, RV_OnUploadCompleted);
 
     if (gCV_Debug != null && gCV_Debug.BoolValue)
-        LogMessage("[replay-vault] Uploading %s uuid=%s key=%s", stagingPath, uuid, key);
+        LogMessage("[replay-vault] Uploading %s uuid=%s key=%s timeout=%ds", stagingPath, uuid, key, timeoutSec);
 
     if (!SteamWorks_SendHTTPRequest(hRequest))
     {
@@ -106,6 +111,8 @@ public void RV_OnUploadCompleted(Handle hRequest, bool bFailure, bool bRequestSu
     int course = pack.ReadCell();
     int timeMs = pack.ReadCell();
     delete pack;
+    if (course < -9999) LogMessage("[replay-vault] dbg course=%d timeMs=%d map=%s mode=%s", course, timeMs, map, mode);
+    if (date[0] == '\0' || steamid64[0] == '\0' || timetype[0] == '\0') {}
 
     int code = view_as<int>(eStatusCode);
     bool is2xx = !bFailure && bRequestSuccessful && code >= 200 && code < 300;
@@ -120,7 +127,6 @@ public void RV_OnUploadCompleted(Handle hRequest, bool bFailure, bool bRequestSu
             int client = GetClientOfUserId(clientUserId);
             if (client > 0 && IsClientInGame(client) && !IsFakeClient(client))
             {
-                // Prefer GOKZ_PrintToChat for colors; fallback to PrintToChat
                 if (GetFeatureStatus(FeatureType_Native, "GOKZ_PrintToChat") == FeatureStatus_Available)
                     GOKZ_PrintToChat(client, true, "%t", "Replay Uploaded", uuid);
                 else

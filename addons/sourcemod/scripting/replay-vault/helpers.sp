@@ -229,6 +229,25 @@ stock bool RV_ParseRunFileName(const char[] fileName, int &course, char[] modeSh
     return true;
 }
 
+// Parse run filename {course}_{MODE}_{STYLE}_{TIMETYPE}.replay -> course/modeShort/timetype (fallback)
+stock bool RV_ParseRunFileName(const char[] fileName, int &course, char[] modeShort, int modeShortLen, char[] typeStr, int typeStrLen)
+{
+    char buf[PLATFORM_MAX_PATH];
+    strcopy(buf, sizeof(buf), fileName);
+    int dot = StrContains(buf, ".replay");
+    if (dot == -1) return false;
+    buf[dot] = '\0';
+    char parts[4][16];
+    int n = ExplodeString(buf, "_", parts, sizeof(parts), sizeof(parts[]));
+    if (n < 4) return false;
+    course = StringToInt(parts[0]);
+    strcopy(modeShort, modeShortLen, parts[1]);
+    RV_ToLower(modeShort, modeShort, modeShortLen);
+    if (StrEqual(parts[3], "PRO", false)) strcopy(typeStr, typeStrLen, "pro");
+    else strcopy(typeStr, typeStrLen, "nub");
+    return true;
+}
+
 bool RV_GetSteamID64(int client, char[] buf, int maxlen)
 {
     if (maxlen < 21)

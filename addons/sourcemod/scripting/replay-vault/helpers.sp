@@ -210,7 +210,7 @@ void RV_BuildCheaterKey(const char[] map, const char[] steamid64, const char[] m
 }
 
 // Parse run filename {course}_{MODE}_{STYLE}_{TIMETYPE}.replay -> course/modeShort/timetype (fallback)
-stock bool RV_ParseRunFileName(const char[] fileName, int &course, char[] modeShort, int modeShortLen, char[] typeStr, int typeStrLen)
+stock bool RV_ParseRunFileNameLocal(const char[] fileName, int &course, char[] modeShort, int modeShortLen, char[] typeStr, int typeStrLen)
 {
     char buf[PLATFORM_MAX_PATH];
     strcopy(buf, sizeof(buf), fileName);

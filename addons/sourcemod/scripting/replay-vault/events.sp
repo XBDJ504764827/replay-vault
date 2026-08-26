@@ -84,7 +84,7 @@ int RV_GetRunMode(int client, const char[] filePath)
 
     int ignoredCourse;
     char modeShort[16], ignoredTimeType[16];
-    if (RV_ParseRunFileName(fileName, ignoredCourse, modeShort, sizeof(modeShort),
+    if (RV_ParseRunFileNameLocal(fileName, ignoredCourse, modeShort, sizeof(modeShort),
         ignoredTimeType, sizeof(ignoredTimeType)))
     {
         int parsedMode = RV_ModeFromString(modeShort);

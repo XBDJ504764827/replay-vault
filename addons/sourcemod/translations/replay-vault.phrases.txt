@@ -2,12 +2,13 @@
 {
     "Replay Uploaded"
     {
+        "#format" "{1:s}"
         "en"    "Replay uploaded UUID: {1}"
-        "zh"    "录像已上传 UUID: {1}"
+        "chi"   "录像已上传 UUID: {1}"
     }
     "Replay Upload Failed"
     {
         "en"    "Replay upload failed, please contact admin"
-        "zh"    "录像上传失败，请联系管理员"
+        "chi"   "录像上传失败，请联系管理员"
     }
 }

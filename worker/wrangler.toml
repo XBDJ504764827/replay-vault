@@ -1,0 +1,20 @@
+name = "replay-vault"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGIN = "*"
+MAX_UPLOAD_BYTES = "52428800"
+
+[[r2_buckets]]
+binding = "REPLAYS"
+bucket_name = "REPLACE_WITH_R2_BUCKET_NAME"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "REPLACE_WITH_D1_DATABASE_NAME"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[triggers]
+crons = ["0 0 * * *"]

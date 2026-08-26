@@ -1,13 +1,13 @@
 "Phrases"
 {
-    "Replay Uploaded"
+    "Replay Uploaded Prefix"
     {
-        "en"    "Replay uploaded UUID: {1}"
-        "zh"    "录像已上传 UUID: {1}"
+        "en"    "Replay uploaded UUID: "
+        "chi"   "录像已上传 UUID: "
     }
     "Replay Upload Failed"
     {
         "en"    "Replay upload failed, please contact admin"
-        "zh"    "录像上传失败，请联系管理员"
+        "chi"   "录像上传失败，请联系管理员"
     }
 }

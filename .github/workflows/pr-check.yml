@@ -85,11 +85,9 @@ jobs:
           rm -rf "$PKG" dist
           mkdir -p "$PKG/addons/sourcemod/plugins"
           mkdir -p "$PKG/addons/sourcemod/translations"
-          mkdir -p "$PKG/cfg/sourcemod"
           mkdir -p dist
           cp addons/sourcemod/plugins/replay-vault.smx "$PKG/addons/sourcemod/plugins/"
           cp addons/sourcemod/translations/replay-vault.phrases.txt "$PKG/addons/sourcemod/translations/"
-          cp cfg/sourcemod/replay-vault.cfg "$PKG/cfg/sourcemod/"
           cp README.md "$PKG/" 2>/dev/null || true
           ZIP="replay-vault-TEST-PR${PRNUM}-v${VER}-${SHORT}.zip"
           echo "Zip: $ZIP"

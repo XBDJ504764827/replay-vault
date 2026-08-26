@@ -17,10 +17,10 @@
 public Plugin myinfo =
 {
     name = "replay-vault",
-    author = "cngokz",
+    author = "XBDJ504764827",
     description = "Full replay backup to R2 (Worker relay) - all runs/jumps/cheaters by UUID",
     version = REPLAY_VAULT_VERSION,
-    url = "https://github.com/cngokz/replay-vault"
+    url = ""
 };
 
 // Current map lowercased for key building

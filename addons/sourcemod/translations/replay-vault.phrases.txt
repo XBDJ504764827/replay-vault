@@ -1,10 +1,9 @@
 "Phrases"
 {
-    "Replay Uploaded"
+    "Replay Uploaded Prefix"
     {
-        "#format" "{1:s}"
-        "en"    "Replay uploaded UUID: {1}"
-        "chi"   "录像已上传 UUID: {1}"
+        "en"    "Replay uploaded UUID: "
+        "chi"   "录像已上传 UUID: "
     }
     "Replay Upload Failed"
     {

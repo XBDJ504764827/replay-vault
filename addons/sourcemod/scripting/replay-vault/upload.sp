@@ -179,9 +179,9 @@ public void RV_OnUploadCompleted(Handle hRequest, bool bFailure, bool bRequestSu
             if (client > 0 && IsClientInGame(client) && !IsFakeClient(client))
             {
                 if (GetFeatureStatus(FeatureType_Native, "GOKZ_PrintToChat") == FeatureStatus_Available)
-                    GOKZ_PrintToChat(client, true, "%t", "Replay Uploaded", uuid);
+                    GOKZ_PrintToChat(client, true, "%t{%s}", "Replay Uploaded Prefix", uuid);
                 else
-                    PrintToChat(client, "[replay-vault] %T", "Replay Uploaded", client, uuid);
+                    PrintToChat(client, "[replay-vault] %T{%s}", "Replay Uploaded Prefix", client, uuid);
             }
         }
         if (gCV_Debug != null && gCV_Debug.BoolValue)

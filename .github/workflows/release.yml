@@ -45,14 +45,19 @@ jobs:
 
       - name: Package Release
         run: |
+          set -euo pipefail
           VER="${{ steps.version.outputs.version }}"
           ZIP="replay-vault-v${VER}.zip"
-          zip -r "$ZIP" \
-            addons/sourcemod/plugins/replay-vault.smx \
-            addons/sourcemod/translations/replay-vault.phrases.txt \
-            cfg/sourcemod/replay-vault.cfg \
-            README.md
+          PKG="release-package"
+          rm -rf "$PKG" "$ZIP"
+          mkdir -p "$PKG/addons/sourcemod/plugins"
+          mkdir -p "$PKG/addons/sourcemod/translations"
+          cp addons/sourcemod/plugins/replay-vault.smx "$PKG/addons/sourcemod/plugins/"
+          cp addons/sourcemod/translations/replay-vault.phrases.txt "$PKG/addons/sourcemod/translations/"
+          cp README.md "$PKG/"
+          (cd "$PKG" && zip -r "../$ZIP" .)
           ls -lh "$ZIP"
+          unzip -l "$ZIP"
           echo "ZIP=$ZIP" >> $GITHUB_ENV
 
       - name: Create GitHub Release

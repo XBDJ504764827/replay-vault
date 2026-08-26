@@ -57,11 +57,11 @@ STRICT=1 ./build.sh  # 警告即错误（CI 用）
 ## 安装
 
 1. 下载 `Releases` 中 `replay-vault-vX.Y.Z.zip`（或 `PR` 测试包 `replay-vault-pr{N}.zip`）。
-2. 将 `addons/`、`cfg/` 合并进服务器根目录。
-3. 在 `cfg/sourcemod/replay-vault.cfg` 填入 `replay_vault_url`（新 Worker 地址）与 `replay_vault_key`。
+2. 将 `addons/` 合并进服务器根目录。Release 包不包含配置文件，避免覆盖服务器现有配置。
+3. 首次启动插件会自动生成 `cfg/sourcemod/replay-vault.cfg`；在该文件中填入 `replay_vault_url`（新 Worker 地址）与 `replay_vault_key`。
 4. 重启或 `sm plugins load replay-vault`。
 
-> 配置文件首次启动自动创建，已存在不覆盖，仅补齐新增 `ConVar`。
+> 配置文件首次启动自动创建，已存在不覆盖，仅补齐新增 `ConVar`。后续更新 Release 包不会覆盖服务器配置。
 
 ## 依赖
 

@@ -10,13 +10,16 @@ void RV_OnMapStart_Helpers()
 {
     char map[64];
     GetCurrentMapDisplayName(map, sizeof(map));
-    RV_ToLower(map, gC_CurrentMap, sizeof(gC_CurrentMap));
-    // Ensure staging dir
-    RV_EnsureDir(RV_STAGING_DIR);
+    RV_SanitizeMap(map, gC_CurrentMap, sizeof(gC_CurrentMap));
+    if (!RV_EnsureDir(RV_STAGING_DIR))
+    {
+        LogError("[replay-vault] Failed to create staging directory: %s", RV_STAGING_DIR);
+    }
 }
 
 void RV_ToLower(const char[] input, char[] output, int maxlen)
 {
+    if (maxlen <= 0) return;
     int len = strlen(input);
     if (len >= maxlen) len = maxlen - 1;
     for (int i = 0; i < len; i++)
@@ -26,6 +29,29 @@ void RV_ToLower(const char[] input, char[] output, int maxlen)
         output[i] = c;
     }
     output[len] = '\0';
+}
+
+// Lowercase a path segment and replace separators/unsupported characters.
+void RV_SanitizeSegment(const char[] input, char[] output, int maxlen)
+{
+    if (maxlen <= 0) return;
+
+    int out = 0;
+    for (int i = 0; input[i] != '\0' && out < maxlen - 1; i++)
+    {
+        char c = input[i];
+        if (c >= 'A' && c <= 'Z') c += 32;
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+            || c == '_' || c == '-' || c == '.')
+        {
+            output[out++] = c;
+        }
+        else
+        {
+            output[out++] = '_';
+        }
+    }
+    output[out] = '\0';
 }
 
 void RV_CourseToString(int course, char[] buf, int maxlen)
@@ -44,6 +70,25 @@ void RV_ModeToString(int mode, char[] buf, int maxlen)
     char tmp[16];
     strcopy(tmp, sizeof(tmp), gC_ModeNamesShort[mode]);
     RV_ToLower(tmp, buf, maxlen);
+}
+
+int RV_ModeFromString(const char[] mode)
+{
+    for (int i = 0; i < MODE_COUNT; i++)
+    {
+        if (StrEqual(mode, gC_ModeNamesShort[i], false)) return i;
+    }
+    return -1;
+}
+
+void RV_JumpTypeToString(int jumptype, char[] buf, int maxlen)
+{
+    if (jumptype >= 0 && jumptype < JUMPTYPE_COUNT)
+    {
+        RV_SanitizeSegment(gC_JumpTypeKeys[jumptype], buf, maxlen);
+        return;
+    }
+    FormatEx(buf, maxlen, "%d", jumptype);
 }
 
 void RV_TimeTypeToString(int timeType, char[] buf, int maxlen)
@@ -69,31 +114,52 @@ void RV_FormatDate(int timestamp, char[] buf, int maxlen)
 // Map sanitize: lower, '/' -> '_' , keep a-z0-9_- .
 void RV_SanitizeMap(const char[] input, char[] output, int maxlen)
 {
-    char lower[64];
-    RV_ToLower(input, lower, sizeof(lower));
-    int out = 0;
-    for (int i = 0; lower[i] != '\0' && out < maxlen - 1; i++)
+    RV_SanitizeSegment(input, output, maxlen);
+}
+
+void RV_GetFileName(const char[] path, char[] output, int maxlen)
+{
+    int lastSlash = -1;
+    for (int i = 0; path[i] != '\0'; i++)
     {
-        char c = lower[i];
-        if (c == '/') c = '_';
-        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+        if (path[i] == '/' || path[i] == '\\') lastSlash = i;
+    }
+    if (lastSlash == -1) strcopy(output, maxlen, path);
+    else strcopy(output, maxlen, path[lastSlash + 1]);
+}
+
+static bool RV_EnsureAbsoluteDir(const char[] path)
+{
+    if (DirExists(path)) return true;
+
+    int len = strlen(path);
+    int slash = -1;
+    for (int i = len - 1; i > 0; i--)
+    {
+        if (path[i] == '/' || path[i] == '\\')
         {
-            output[out++] = c;
-        }
-        else
-        {
-            output[out++] = '_';
+            slash = i;
+            break;
         }
     }
-    output[out] = '\0';
+
+    if (slash > 0)
+    {
+        char parent[PLATFORM_MAX_PATH];
+        strcopy(parent, sizeof(parent), path);
+        parent[slash] = '\0';
+        if (!RV_EnsureAbsoluteDir(parent)) return false;
+    }
+
+    if (DirExists(path)) return true;
+    return CreateDirectory(path, 511) || DirExists(path);
 }
 
 bool RV_EnsureDir(const char[] dir)
 {
     char path[PLATFORM_MAX_PATH];
     BuildPath(Path_SM, path, sizeof(path), "%s", dir);
-    if (DirExists(path)) return true;
-    return CreateDirectory(path, 511);
+    return RV_EnsureAbsoluteDir(path);
 }
 
 // Build run key: {map}/runs/{course}/{steamid64}/{mode}/{timetype}/{date}_{uuid}.replay
@@ -101,8 +167,14 @@ void RV_BuildRunKey(const char[] map, const char[] courseStr, const char[] steam
     const char[] mode, const char[] timetype, const char[] date, const char[] uuid,
     char[] key, int maxlen)
 {
+    char safeMap[64], safeCourse[16], safeSteamID[32], safeMode[16], safeTimeType[16];
+    RV_SanitizeSegment(map, safeMap, sizeof(safeMap));
+    RV_SanitizeSegment(courseStr, safeCourse, sizeof(safeCourse));
+    RV_SanitizeSegment(steamid64, safeSteamID, sizeof(safeSteamID));
+    RV_SanitizeSegment(mode, safeMode, sizeof(safeMode));
+    RV_SanitizeSegment(timetype, safeTimeType, sizeof(safeTimeType));
     FormatEx(key, maxlen, "%s/runs/%s/%s/%s/%s/%s_%s.replay",
-        map, courseStr, steamid64, mode, timetype, date, uuid);
+        safeMap, safeCourse, safeSteamID, safeMode, safeTimeType, date, uuid);
 }
 
 // Build jump key (with optional block)
@@ -110,14 +182,17 @@ void RV_BuildJumpKey(const char[] map, const char[] steamid64, const char[] mode
     const char[] jumpType, int block, const char[] date, const char[] uuid,
     char[] key, int maxlen)
 {
-    char jumpLower[32];
-    RV_ToLower(jumpType, jumpLower, sizeof(jumpLower));
+    char safeMap[64], safeSteamID[32], safeMode[16], jumpLower[32];
+    RV_SanitizeSegment(map, safeMap, sizeof(safeMap));
+    RV_SanitizeSegment(steamid64, safeSteamID, sizeof(safeSteamID));
+    RV_SanitizeSegment(mode, safeMode, sizeof(safeMode));
+    RV_SanitizeSegment(jumpType, jumpLower, sizeof(jumpLower));
     if (block > 0)
         FormatEx(key, maxlen, "%s/jumps/%s/%s/%s/block_%d/%s_%s.replay",
-            map, steamid64, mode, jumpLower, block, date, uuid);
+            safeMap, safeSteamID, safeMode, jumpLower, block, date, uuid);
     else
         FormatEx(key, maxlen, "%s/jumps/%s/%s/%s/%s_%s.replay",
-            map, steamid64, mode, jumpLower, date, uuid);
+            safeMap, safeSteamID, safeMode, jumpLower, date, uuid);
 }
 
 // Build cheater key
@@ -125,10 +200,33 @@ void RV_BuildCheaterKey(const char[] map, const char[] steamid64, const char[] m
     const char[] reason, const char[] date, const char[] uuid,
     char[] key, int maxlen)
 {
-    char reasonLower[64];
-    RV_ToLower(reason, reasonLower, sizeof(reasonLower));
+    char safeMap[64], safeSteamID[32], safeMode[16], reasonLower[64];
+    RV_SanitizeSegment(map, safeMap, sizeof(safeMap));
+    RV_SanitizeSegment(steamid64, safeSteamID, sizeof(safeSteamID));
+    RV_SanitizeSegment(mode, safeMode, sizeof(safeMode));
+    RV_SanitizeSegment(reason, reasonLower, sizeof(reasonLower));
     FormatEx(key, maxlen, "%s/cheaters/%s/%s/%s/%s_%s.replay",
-        map, steamid64, mode, reasonLower, date, uuid);
+        safeMap, safeSteamID, safeMode, reasonLower, date, uuid);
+}
+
+// Parse run filename {course}_{MODE}_{STYLE}_{TIMETYPE}.replay -> course/modeShort/timetype (fallback)
+stock bool RV_ParseRunFileNameLocal(const char[] fileName, int &course, char[] modeShort, int modeShortLen, char[] typeStr, int typeStrLen)
+{
+    char buf[PLATFORM_MAX_PATH];
+    strcopy(buf, sizeof(buf), fileName);
+    int dot = StrContains(buf, ".replay");
+    if (dot == -1) return false;
+    buf[dot] = '\0';
+    char parts[8][32];
+    int n = ExplodeString(buf, "_", parts, sizeof(parts), sizeof(parts[]));
+    if (n < 4) return false;
+    int base = n - 4;
+    course = StringToInt(parts[base]);
+    strcopy(modeShort, modeShortLen, parts[base + 1]);
+    RV_ToLower(modeShort, modeShort, modeShortLen);
+    if (StrEqual(parts[base + 3], "PRO", false)) strcopy(typeStr, typeStrLen, "pro");
+    else strcopy(typeStr, typeStrLen, "nub");
+    return true;
 }
 
 // Parse run filename {course}_{MODE}_{STYLE}_{TIMETYPE}.replay -> course/modeShort/timetype (fallback)
@@ -152,6 +250,12 @@ stock bool RV_ParseRunFileName(const char[] fileName, int &course, char[] modeSh
 
 bool RV_GetSteamID64(int client, char[] buf, int maxlen)
 {
+    if (maxlen < 21)
+    {
+        if (maxlen > 0) buf[0] = '\0';
+        return false;
+    }
+    buf[0] = '\0';
     if (GetClientAuthId(client, AuthId_SteamID64, buf, maxlen) && buf[0] != '\0')
     {
         return true;
@@ -230,26 +334,40 @@ bool RV_FileCopy(const char[] source, const char[] destination)
     }
     int buffer[2048];
     int count;
-    while (!src.EndOfFile())
+    bool ok = true;
+    while ((count = src.Read(buffer, sizeof(buffer), 1)) > 0)
     {
-        count = src.Read(buffer, 2048, 1);
-        if (count <= 0) break;
-        dst.Write(buffer, count, 1);
+        if (!dst.Write(buffer, count, 1))
+        {
+            ok = false;
+            break;
+        }
     }
+    if (count < 0) ok = false;
     delete src;
     delete dst;
-    return true;
+    if (!ok && FileExists(destination)) DeleteFile(destination);
+    return ok;
 }
 
 bool RV_StageFile(const char[] source, const char[] uuid, char[] stagingPath, int maxlen)
 {
+    stagingPath[0] = '\0';
+    if (!RV_EnsureDir(RV_STAGING_DIR)) return false;
+
     char dir[PLATFORM_MAX_PATH];
     BuildPath(Path_SM, dir, sizeof(dir), RV_STAGING_DIR);
-    if (!DirExists(dir)) CreateDirectory(dir, 511);
     FormatEx(stagingPath, maxlen, "%s/%s.replay", dir, uuid);
-    if (FileExists(stagingPath))
+    int suffix = 0;
+    while (FileExists(stagingPath) && suffix < 1000)
     {
         FormatEx(stagingPath, maxlen, "%s/%s_%d.replay", dir, uuid, ++gI_StageCounter);
+        suffix++;
+    }
+    if (FileExists(stagingPath))
+    {
+        stagingPath[0] = '\0';
+        return false;
     }
     return RV_FileCopy(source, stagingPath);
 }

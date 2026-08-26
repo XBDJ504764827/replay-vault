@@ -1,61 +1,118 @@
 name: PR Check
 
+env:
+  SM_VERSION: "1.11"
+
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
-# Only build PRs from develop → main (per project branching model)
-# Other PRs are ignored without failure so they don't block the queue.
+concurrency:
+  group: pr-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
-  pr-check:
-    if: github.head_ref == 'develop'
-    runs-on: ubuntu-22.04
+  build:
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout PR head
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Setup SourceMod + GOKZ includes
-        run: ./build.sh setup
+      - name: Determine version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="$(grep -E '#define REPLAY_VAULT_VERSION "' addons/sourcemod/scripting/include/replay-vault/version.inc | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ -z "$VER" ]; then echo "Failed to parse REPLAY_VAULT_VERSION"; cat addons/sourcemod/scripting/include/replay-vault/version.inc; exit 1; fi
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          SHORT="$(echo "$GITHUB_SHA" | cut -c1-7)"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          PRNUM="${{ github.event.number }}"
+          if [ -z "$PRNUM" ]; then PRNUM="${{ github.run_number }}"; fi
+          echo "prnum=$PRNUM" >> "$GITHUB_OUTPUT"
+          echo "Version: $VER, PR: $PRNUM, Short: $SHORT"
 
-      - name: Strict compile check (STRICT=1)
-        run: STRICT=1 ./build.sh
-        env:
-          STRICT: "1"
+      - name: Setup SourceMod 1.11
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(curl -s https://sm.alliedmods.net/smdrop/${SM_VERSION}/ | grep -o 'sourcemod-1.11[^"]*-linux.tar.gz' | sort -V | tail -n1)"
+          echo "SM package: $url"
+          curl -sL -o /tmp/sm.tar.gz "https://sm.alliedmods.net/smdrop/${SM_VERSION}/${url}"
+          mkdir -p /tmp/sm
+          tar xzf /tmp/sm.tar.gz -C /tmp/sm
+          chmod +x /tmp/sm/addons/sourcemod/scripting/spcomp* || true
+          ls -lh /tmp/sm/addons/sourcemod/scripting/spcomp* 2>&1 | head -n 20
+          /tmp/sm/addons/sourcemod/scripting/spcomp64 -h 2>&1 | head -n 20 || true
+
+      - name: Fetch GOKZ include deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./build.sh deps
+
+      - name: Build (strict, -E warnings-as-errors)
+        shell: bash
+        run: |
+          set -euo pipefail
+          STRICT=1 SM_DIR=/tmp/sm ./build.sh
 
       - name: Verify single SMX
+        shell: bash
         run: |
-          test -f addons/sourcemod/plugins/replay-vault.smx
+          set -euo pipefail
           ls -lh addons/sourcemod/plugins/replay-vault.smx
-          count=$(ls addons/sourcemod/plugins/*.smx 2>/dev/null | wc -l)
-          if [ "$count" -ne 1 ]; then
+          count="$(ls addons/sourcemod/plugins/*.smx 2>/dev/null | wc -l)"
+          if [ "$count" != "1" ]; then
             echo "Expected exactly 1 smx, got $count"
-            ls -lh addons/sourcemod/plugins/
+            ls -la addons/sourcemod/plugins/
             exit 1
           fi
 
-      - name: Package PR test artifact
+      - name: Package full install zip (PR test package)
+        shell: bash
         run: |
-          PR_NUM="${{ github.event.number }}"
-          ZIP="replay-vault-pr${PR_NUM}.zip"
-          zip -r "$ZIP" \
-            addons/sourcemod/plugins/replay-vault.smx \
-            addons/sourcemod/translations/replay-vault.phrases.txt \
-            cfg/sourcemod/replay-vault.cfg \
-            README.md
-          ls -lh "$ZIP"
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.ver }}"
+          SHORT="${{ steps.ver.outputs.short }}"
+          PRNUM="${{ steps.ver.outputs.prnum }}"
+          PKG="package"
+          rm -rf "$PKG" dist
+          mkdir -p "$PKG/addons/sourcemod/plugins"
+          mkdir -p "$PKG/addons/sourcemod/translations"
+          mkdir -p "$PKG/cfg/sourcemod"
+          mkdir -p dist
+          cp addons/sourcemod/plugins/replay-vault.smx "$PKG/addons/sourcemod/plugins/"
+          cp addons/sourcemod/translations/replay-vault.phrases.txt "$PKG/addons/sourcemod/translations/"
+          cp cfg/sourcemod/replay-vault.cfg "$PKG/cfg/sourcemod/"
+          cp README.md "$PKG/" 2>/dev/null || true
+          ZIP="replay-vault-TEST-PR${PRNUM}-v${VER}-${SHORT}.zip"
+          echo "Zip: $ZIP"
+          (cd "$PKG" && zip -r "../dist/$ZIP" .)
+          ls -lh dist/
+          unzip -l "dist/$ZIP"
 
-      - name: Upload PR test package
+      - name: Upload PR artifact (smx)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: replay-vault-pr${{ github.event.number }}
-          path: replay-vault-pr${{ github.event.number }}.zip
+          name: replay-vault-TEST-PR${{ steps.ver.outputs.prnum }}-v${{ steps.ver.outputs.ver }}-${{ steps.ver.outputs.short }}
+          path: |
+            addons/sourcemod/plugins/replay-vault.smx
+            addons/sourcemod/translations/replay-vault.phrases.txt
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: warn
 
-      - name: Summary
-        run: |
-          echo "### PR Check Passed" >> $GITHUB_STEP_SUMMARY
-          echo "Strict compile OK. Test package: replay-vault-pr${{ github.event.number }}.zip" >> $GITHUB_STEP_SUMMARY
-          echo "Download from Artifacts, extract and merge addons/cfg to server root for testing." >> $GITHUB_STEP_SUMMARY
+      - name: Upload PR artifact (full zip)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-vault-TEST-full-PR${{ steps.ver.outputs.prnum }}-v${{ steps.ver.outputs.ver }}-${{ steps.ver.outputs.short }}
+          path: dist/*.zip
+          retention-days: 14
+          if-no-files-found: warn

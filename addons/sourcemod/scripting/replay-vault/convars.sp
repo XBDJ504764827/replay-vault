@@ -34,10 +34,11 @@ void RV_CreateConVars()
 
 bool RV_CanUpload()
 {
-    if (gCV_Enabled == null || !gCV_Enabled.BoolValue)
+    if (!gB_SteamWorksOK || gCV_Enabled == null || !gCV_Enabled.BoolValue)
     {
         return false;
     }
+    if (gCV_Url == null || gCV_Key == null) return false;
     char url[256], key[256];
     gCV_Url.GetString(url, sizeof(url));
     gCV_Key.GetString(key, sizeof(key));

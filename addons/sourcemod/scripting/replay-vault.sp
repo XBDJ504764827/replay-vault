@@ -25,6 +25,8 @@ public Plugin myinfo =
 
 // Current map lowercased for key building
 char gC_CurrentMap[64];
+bool gB_SteamWorksOK;
+StringMap gM_CapturedReplays;
 
 #include "replay-vault/convars.sp"
 #include "replay-vault/helpers.sp"
@@ -39,19 +41,47 @@ public void OnPluginStart()
     LoadTranslations("replay-vault.phrases");
     LoadTranslations("gokz-common.phrases");
     RV_CreateConVars();
+    RV_UpdateDependencies();
+    RV_InitEventState();
 }
 
 public void OnAllPluginsLoaded()
 {
+    RV_UpdateDependencies();
+    if (!gB_SteamWorksOK)
+    {
+        LogError("[replay-vault] SteamWorks extension is not loaded; uploads are disabled");
+    }
     if (!LibraryExists("gokz-replays"))
     {
-        LogMessage("[replay-vault] gokz-replays not found at load, uploads will be queued until available");
+        LogMessage("[replay-vault] gokz-replays not found at load; replay forwards are unavailable");
+    }
+}
+
+public void OnLibraryAdded(const char[] name)
+{
+    if (StrEqual(name, "SteamWorks.ext", false) || StrEqual(name, "SteamWorks", false))
+    {
+        RV_UpdateDependencies();
+    }
+}
+
+public void OnLibraryRemoved(const char[] name)
+{
+    if (StrEqual(name, "SteamWorks.ext", false) || StrEqual(name, "SteamWorks", false))
+    {
+        gB_SteamWorksOK = false;
     }
 }
 
 public void OnMapStart()
 {
     RV_OnMapStart();
+}
+
+public void OnPluginEnd()
+{
+    delete gM_CapturedReplays;
 }
 
 public Action GOKZ_RP_OnReplaySaved(int client, int replayType, const char[] map,

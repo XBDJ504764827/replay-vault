@@ -7,6 +7,8 @@ ConVar gCV_Timeout;
 ConVar gCV_Debug;
 ConVar gCV_Chat;
 ConVar gCV_AnnounceJumps;
+ConVar gCV_RetryInterval;
+ConVar gCV_StagingMaxAge;
 
 void RV_CreateConVars()
 {
@@ -27,6 +29,10 @@ void RV_CreateConVars()
         "Announce UUID in chat after run upload (1=enabled)", _, true, 0.0, true, 1.0);
     gCV_AnnounceJumps = AutoExecConfig_CreateConVar("replay_vault_announce_jumps", "0",
         "Also announce jumps/cheaters uploads (1=enabled)", _, true, 0.0, true, 1.0);
+    gCV_RetryInterval = AutoExecConfig_CreateConVar("replay_vault_retry_interval", "60",
+        "Staging retry scan interval seconds (min 15)", _, true, 15.0, true, 3600.0);
+    gCV_StagingMaxAge = AutoExecConfig_CreateConVar("replay_vault_staging_max_age", "24",
+        "Hours before giving up on staged replay uploads (min 1)", _, true, 1.0, true, 168.0);
 
     AutoExecConfig_ExecuteFile();
     AutoExecConfig_CleanFile();
@@ -39,7 +45,7 @@ bool RV_CanUpload()
         return false;
     }
     if (gCV_Url == null || gCV_Key == null) return false;
-    char url[256], key[256];
+    char url[512], key[256];
     gCV_Url.GetString(url, sizeof(url));
     gCV_Key.GetString(key, sizeof(key));
     TrimString(url);

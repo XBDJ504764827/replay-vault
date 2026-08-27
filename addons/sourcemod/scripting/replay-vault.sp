@@ -43,6 +43,8 @@ public void OnPluginStart()
     RV_CreateConVars();
     RV_UpdateDependencies();
     RV_InitEventState();
+    RV_InitUploadState();
+    RV_InitStagingScanner();
 }
 
 public void OnAllPluginsLoaded()

@@ -8,6 +8,7 @@
 #include <gokz/replays>
 
 #include <autoexecconfig>
+#include <json>
 
 #pragma newdecls required
 #pragma semicolon 1
@@ -32,6 +33,8 @@ StringMap gM_CapturedReplays;
 #include "replay-vault/helpers.sp"
 #include "replay-vault/uuid.sp"
 #include "replay-vault/upload.sp"
+#include "replay-vault/cache.sp"
+#include "replay-vault/viewer.sp"
 #include "replay-vault/events.sp"
 
 // =====[ PLUGIN EVENTS ]=====
@@ -45,6 +48,8 @@ public void OnPluginStart()
     RV_InitEventState();
     RV_InitUploadState();
     RV_InitStagingScanner();
+    RV_InitViewer();
+    RV_InitCacheSweeper();
 }
 
 public void OnAllPluginsLoaded()
@@ -84,6 +89,7 @@ public void OnMapStart()
 public void OnPluginEnd()
 {
     delete gM_CapturedReplays;
+    RV_OnPluginEnd_Viewer();
 }
 
 public Action GOKZ_RP_OnReplaySaved(int client, int replayType, const char[] map,

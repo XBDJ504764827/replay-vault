@@ -29,6 +29,8 @@ enum struct ReplayStageMeta
 	int Attempts;  // 已完成的发送次数（0 = 尚未发送）
 	int NextRetry; // 下次允许重试的 Unix 时间（0 = 尽快）
 	int Created;   // staging 元数据创建时间
+	char Category[16]; // run / jump / cheat
+	int Tickrate;  // 录制时服务器 tickrate
 }
 
 StringMap gM_InFlight; // uuid -> 进入 in-flight 的 Unix 时间，防止扫描器与回调并发重复上传
@@ -112,6 +114,13 @@ void RV_MetaPathOf(const char[] stagingPath, char[] output, int maxlen)
     FormatEx(output, maxlen, "%s.meta", tmp);
 }
 
+void RV_CategoryFromKey(const char[] key, char[] buf, int maxlen)
+{
+    if (StrContains(key, "/runs/") != -1) strcopy(buf, maxlen, "run");
+    else if (StrContains(key, "/jumps/") != -1) strcopy(buf, maxlen, "jump");
+    else strcopy(buf, maxlen, "cheat");
+}
+
 bool RV_ReadMeta(const char[] metaPath, ReplayStageMeta meta)
 {
     File file = OpenFile(metaPath, "rb");
@@ -138,8 +147,16 @@ bool RV_ReadMeta(const char[] metaPath, ReplayStageMeta meta)
         else if (StrEqual(field, "attempts")) meta.Attempts = StringToInt(value);
         else if (StrEqual(field, "nextRetry")) meta.NextRetry = StringToInt(value);
         else if (StrEqual(field, "created")) meta.Created = StringToInt(value);
+        else if (StrEqual(field, "category")) strcopy(meta.Category, sizeof(meta.Category), value);
+        else if (StrEqual(field, "tickrate")) meta.Tickrate = StringToInt(value);
     }
     delete file;
+
+    // Legacy metas written before the viewer existed carry no category.
+    if (meta.Category[0] == '\0' && meta.Key[0] != '\0')
+    {
+        RV_CategoryFromKey(meta.Key, meta.Category, sizeof(meta.Category));
+    }
     return meta.Key[0] != '\0' && meta.Map[0] != '\0' && meta.SteamID64[0] != '\0';
 }
 
@@ -159,6 +176,8 @@ bool RV_WriteMeta(const char[] metaPath, const ReplayStageMeta meta)
     file.WriteLine("attempts=%d", meta.Attempts);
     file.WriteLine("nextRetry=%d", meta.NextRetry);
     file.WriteLine("created=%d", meta.Created);
+    file.WriteLine("category=%s", meta.Category);
+    file.WriteLine("tickrate=%d", meta.Tickrate);
     delete file;
     return true;
 }
@@ -234,6 +253,15 @@ void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid
     headersOk = SteamWorks_SetHTTPRequestHeaderValue(hRequest, "X-Date", date) && headersOk;
     headersOk = SteamWorks_SetHTTPRequestHeaderValue(hRequest, "X-SteamID64", steamid64) && headersOk;
 
+    char tickrateStr[16];
+    float tickInterval = GetTickInterval();
+    int serverTickrate = tickInterval > 0.0 ? RoundToZero(1.0 / tickInterval) : 0;
+    if (serverTickrate > 0)
+    {
+        IntToString(serverTickrate, tickrateStr, sizeof(tickrateStr));
+        headersOk = SteamWorks_SetHTTPRequestHeaderValue(hRequest, "X-Tickrate", tickrateStr) && headersOk;
+    }
+
     char replayType[16];
     if (StrContains(key, "/runs/") != -1) strcopy(replayType, sizeof(replayType), "run");
     else if (StrContains(key, "/jumps/") != -1) strcopy(replayType, sizeof(replayType), "jump");
@@ -273,6 +301,8 @@ void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid
     meta.Attempts = 0;
     meta.NextRetry = 0;
     meta.Created = GetTime();
+    RV_CategoryFromKey(key, meta.Category, sizeof(meta.Category));
+    meta.Tickrate = serverTickrate;
 
     char metaPath[PLATFORM_MAX_PATH];
     RV_MetaPathOf(stagingPath, metaPath, sizeof(metaPath));
@@ -352,7 +382,9 @@ public void RV_OnUploadCompleted(Handle hRequest, bool bFailure, bool bRequestSu
 
     if (is2xx)
     {
-        RV_DeleteStagedPair(stagingPath);
+        // 上传成功后把 staging 提升为本地缓存：同盘 RenameFile 零拷贝，
+        // 玩家马上用 UUID 回看时无需再回源 R2。
+        RV_PromoteToCache(stagingPath);
         if (RV_ShouldAnnounceKey(key))
         {
             int client = GetClientOfUserId(clientUserId);

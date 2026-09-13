@@ -14,9 +14,10 @@ The API key must be the same value as `replay_vault_key` in
 
 If the D1 table was created from an older version of the project documentation,
 run `PRAGMA table_info(replays);` in the D1 Console. If `category` is missing,
-run `migration-from-legacy.sql` once. The current Worker also writes an empty
-`course_str` for jumps and cheats, so legacy `course_str NOT NULL` tables remain
-compatible.
+run `migration-from-legacy.sql` once. If `tickrate` is missing, run
+`migration-add-tickrate.sql` once (required by the in-game viewer's
+map/tickrate pre-check). The current Worker also writes an empty `course_str`
+for jumps and cheats, so legacy `course_str NOT NULL` tables remain compatible.
 
 ## Wrangler deployment
 
@@ -54,15 +55,22 @@ replay_vault_key "<the same API_KEY>"
 ## HTTP endpoints
 
 - `GET /health` checks that the Worker is reachable.
-- `POST /` or `POST /upload` receives a replay body.
-- `GET /replay/{uuid}` downloads a replay from private R2.
-- `GET /replay/{uuid}?meta=1` returns indexed metadata.
-- `GET /list?map=...&steamid64=...&prefix=...&limit=100` lists metadata.
+- `POST /` or `POST /upload` receives a replay body (requires `X-API-Key`).
+- `GET /replay/{uuid}` downloads a replay from private R2 (public; the UUID is the capability).
+- `GET /replay/{uuid}?meta=1` returns indexed metadata (public).
+- `GET /list?map=...&steamid64=...&prefix=...&limit=100` lists metadata (requires `X-API-Key`).
+- `POST` uploads may carry `X-Tickrate` (server tickrate), stored and returned by `?meta=1`.
 
 The Worker computes SHA-256 itself when the plugin does not send `X-SHA256`.
 The scheduled trigger deletes D1 rows older than three days. Configure an R2
 lifecycle rule with an empty prefix and three-day expiration separately in the
 Cloudflare R2 dashboard so objects and D1 rows have the same retention.
+
+## Tests
+
+`npm test` runs `test/worker.test.mjs`, a dependency-free Node check that
+exercises `/list` API-key enforcement and `X-Tickrate` storage/validation with
+stubbed R2 + D1 bindings. No Cloudflare account is needed.
 
 ## Dashboard-only deployment
 

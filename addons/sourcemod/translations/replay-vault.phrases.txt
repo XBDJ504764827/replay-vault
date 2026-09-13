@@ -10,4 +10,99 @@
         "en"    "Replay upload failed, please contact admin"
         "chi"   "录像上传失败，请联系管理员"
     }
+
+    // =====[ IN-GAME VIEWER (!rv) ]=====
+    "Replay View Menu Title"
+    {
+        "en"    "Your recent replays"
+        "chi"   "你最近的录像"
+    }
+    "Replay View Disabled"
+    {
+        "en"    "The in-game replay viewer is disabled"
+        "chi"   "游戏内录像查看功能未开启"
+    }
+    "Replay View Menu Disabled"
+    {
+        "en"    "The replay list requires replay_vault_url and replay_vault_key to be configured"
+        "chi"   "录像列表需要先配置 replay_vault_url 与 replay_vault_key"
+    }
+    "Replay View Unavailable"
+    {
+        "en"    "gokz-replays is not loaded, cannot play replays"
+        "chi"   "gokz-replays 未加载，无法播放录像"
+    }
+    "Replay View Invalid UUID"
+    {
+        "en"    "Usage: !rv <uuid>  (uuid must be a valid UUIDv4)"
+        "chi"   "用法：!rv <UUID>（UUID 必须是合法的 UUIDv4）"
+    }
+    "Replay View Cooldown"
+    {
+        "#format"   "{1:d}"
+        "en"    "Please wait {1} more second(s) before viewing another replay"
+        "chi"   "请等待 {1} 秒后再查看录像"
+    }
+    "Replay View Downloading"
+    {
+        "en"    "This replay is already being downloaded, please wait"
+        "chi"   "该录像正在下载中，请稍候"
+    }
+    "Replay View Busy"
+    {
+        "en"    "Too many replay requests right now, please try again later"
+        "chi"   "当前录像请求过多，请稍后再试"
+    }
+    "Replay View Admin Only"
+    {
+        "en"    "Only admins can view cheat replays"
+        "chi"   "只有管理员可以查看作弊录像"
+    }
+    "Replay View Wrong Map"
+    {
+        "#format"   "{1:s}"
+        "en"    "This replay was recorded on {1}. Switch to that map and try again."
+        "chi"   "该录像录制于地图 {1}，请切换到该地图后再查看"
+    }
+    "Replay View Tickrate"
+    {
+        "#format"   "{1:d},{2:d}"
+        "en"    "This replay was recorded on {1} tick but this server is {2} tick"
+        "chi"   "该录像为 {1} tick 录制，本服务器为 {2} tick，无法播放"
+    }
+    "Replay View Not Found"
+    {
+        "en"    "No replay found for that UUID (it may have expired after 3 days)"
+        "chi"   "未找到该 UUID 的录像（可能已超过 3 天被清理）"
+    }
+    "Replay View Playing"
+    {
+        "en"    "Playing replay, use !rpcontrols for replay controls"
+        "chi"   "正在播放录像，使用 !rpcontrols 打开回放控制"
+    }
+    "Replay View Failed"
+    {
+        "en"    "Failed to play this replay (map/tickrate mismatch or invalid file)"
+        "chi"   "播放失败（地图/tickrate 不匹配或文件无效）"
+    }
+    "Replay View Corrupt"
+    {
+        "en"    "The replay file is invalid and has been discarded"
+        "chi"   "录像文件无效，已丢弃"
+    }
+    "Replay View Download Failed"
+    {
+        "en"    "Failed to download this replay from the vault"
+        "chi"   "从云端下载录像失败"
+    }
+    "Replay View Menu Failed"
+    {
+        "en"    "Failed to load your replay list"
+        "chi"   "加载录像列表失败"
+    }
+    "Replay View No Replays"
+    {
+        "en"    "You have no replay in the vault yet"
+        "chi"   "你还没有在云端留下录像"
+    }
 }

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS replays(
   date TEXT NOT NULL,
   timestamp INTEGER NOT NULL,
   time_ms INTEGER,
+  tickrate INTEGER,
   sha256 TEXT NOT NULL,
   size INTEGER NOT NULL,
   created_at TEXT NOT NULL

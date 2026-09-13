@@ -3,6 +3,7 @@
 #define RV_MAX_KEY_LENGTH 512
 #define RV_MAX_DATE_LENGTH 32
 #define RV_STAGING_DIR "data/replay-vault/staging"
+#define RV_CACHE_DIR "data/replay-vault/cache"
 
 int gI_StageCounter; // staging filename dedup
 
@@ -14,6 +15,10 @@ void RV_OnMapStart_Helpers()
     if (!RV_EnsureDir(RV_STAGING_DIR))
     {
         LogError("[replay-vault] Failed to create staging directory: %s", RV_STAGING_DIR);
+    }
+    if (!RV_EnsureDir(RV_CACHE_DIR))
+    {
+        LogError("[replay-vault] Failed to create cache directory: %s", RV_CACHE_DIR);
     }
 }
 
@@ -351,4 +356,101 @@ bool RV_StageFile(const char[] source, const char[] uuid, char[] stagingPath, in
         return false;
     }
     return RV_FileCopy(source, stagingPath);
+}
+
+// Reads a length-prefixed header string (int8 length + bytes) without desyncing
+// the stream when the stored length exceeds the caller's buffer.
+static bool RV_ReadHeaderString(File file, char[] buffer, int maxlen)
+{
+    int len;
+    if (!file.ReadInt8(len) || len < 0 || len > 127) return false;
+    char tmp[128];
+    if (!file.ReadString(tmp, sizeof(tmp), len)) return false;
+    strcopy(buffer, maxlen, tmp);
+    return true;
+}
+
+// Reads a GOKZ replay header without loading tick data.
+// v1 replays have no replay type (always a run) and no tickrate field
+// (GOKZ v1 playback hard-codes 128 tick).
+// Returns false when the file is missing or not a GOKZ replay.
+bool RV_ParseReplayHeader(const char[] path, int &replayType, int &tickrate,
+    char[] mapName, int mapLen)
+{
+    replayType = ReplayType_Run;
+    tickrate = 0;
+    if (mapLen > 0) mapName[0] = '\0';
+
+    File file = OpenFile(path, "rb");
+    if (file == null) return false;
+
+    int magic;
+    if (!file.ReadInt32(magic) || magic != RP_MAGIC_NUMBER)
+    {
+        delete file;
+        return false;
+    }
+
+    int version;
+    if (!file.ReadInt8(version))
+    {
+        delete file;
+        return false;
+    }
+
+    // v2 stores the replay type right after the format version; v1 has none.
+    replayType = ReplayType_Run;
+    if (version >= 2 && !file.ReadInt8(replayType))
+    {
+        delete file;
+        return false;
+    }
+
+    char gokzVersion[32];
+    if (!RV_ReadHeaderString(file, gokzVersion, sizeof(gokzVersion))
+        || !RV_ReadHeaderString(file, mapName, mapLen))
+    {
+        delete file;
+        return false;
+    }
+
+    if (version == 1)
+    {
+        tickrate = 128;
+        replayType = ReplayType_Run;
+        if (gCV_Debug != null && gCV_Debug.BoolValue)
+            LogMessage("[replay-vault] Replay header v1 map=%s gokz=%s tickrate=%d",
+                mapName, gokzVersion, tickrate);
+        delete file;
+        return true;
+    }
+    if (version != 2)
+    {
+        delete file;
+        return false;
+    }
+
+    int mapFileSize, serverIP, timestamp, steamAccountID, mode, style;
+    int rawSensitivity, rawMYaw, rawTickrate;
+    char alias[MAX_NAME_LENGTH];
+    if (!file.ReadInt32(mapFileSize) || !file.ReadInt32(serverIP) || !file.ReadInt32(timestamp)
+        || !RV_ReadHeaderString(file, alias, sizeof(alias))
+        || !file.ReadInt32(steamAccountID) || !file.ReadInt8(mode) || !file.ReadInt8(style)
+        || !file.ReadInt32(rawSensitivity) || !file.ReadInt32(rawMYaw) || !file.ReadInt32(rawTickrate))
+    {
+        delete file;
+        return false;
+    }
+
+    // tickrate and the player view values are stored as float bit patterns.
+    tickrate = RoundToZero(view_as<float>(rawTickrate));
+    if (gCV_Debug != null && gCV_Debug.BoolValue)
+    {
+        LogMessage("[replay-vault] Replay header v2 type=%d map=%s gokz=%s tickrate=%d size=%d ip=%d ts=%d alias=%s steam=%d mode=%d style=%d sens=%.3f myaw=%.3f",
+            replayType, mapName, gokzVersion, tickrate, mapFileSize, serverIP, timestamp,
+            alias, steamAccountID, mode, style,
+            view_as<float>(rawSensitivity), view_as<float>(rawMYaw));
+    }
+    delete file;
+    return true;
 }

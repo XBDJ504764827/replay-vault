@@ -24,7 +24,7 @@ function corsHeaders(env, extra = {}) {
   return {
     "Access-Control-Allow-Origin": allowedOrigin(env),
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,X-API-Key,X-UUID,X-Key,X-Map,X-Course,X-SteamID64,X-Mode,X-TimeType,X-Date,X-Time-Ms,X-Timestamp,X-SHA256,X-Replay-Type",
+    "Access-Control-Allow-Headers": "Content-Type,X-API-Key,X-UUID,X-Key,X-Map,X-Course,X-SteamID64,X-Mode,X-TimeType,X-Date,X-Time-Ms,X-Timestamp,X-SHA256,X-Replay-Type,X-Tickrate",
     "Access-Control-Expose-Headers": "Content-Length,Content-Disposition,ETag",
     "Access-Control-Max-Age": "86400",
     ...extra,
@@ -59,7 +59,7 @@ function safeEqual(left, right) {
   return difference === 0;
 }
 
-function authenticateUpload(request, env) {
+function authenticate(request, env) {
   if (!env.API_KEY) {
     throw new HttpError(500, "configuration_error", "API_KEY secret is not configured");
   }
@@ -199,6 +199,10 @@ function parseUploadMetadata(request) {
   }
 
   const timeMs = parseInteger(header(request, "X-Time-Ms"), "X-Time-Ms", 0, 2147483647);
+  const tickrateHeader = (request.headers.get("X-Tickrate") || "").trim();
+  const tickrate = tickrateHeader === ""
+    ? null
+    : parseInteger(tickrateHeader, "X-Tickrate", 1, 1000);
   const timestampHeader = request.headers.get("X-Timestamp");
   const timestamp = timestampHeader
     ? parseInteger(timestampHeader.trim(), "X-Timestamp", 0, 4102444800)
@@ -209,7 +213,7 @@ function parseUploadMetadata(request) {
   }
 
   return { ...parsedKey, key, map, course, courseStr: courseStr || "", steamid64, mode,
-    timetype: timeType, timeMs, timestamp, suppliedSha256 };
+    timetype: timeType, timeMs, tickrate, timestamp, suppliedSha256 };
 }
 
 function maxUploadBytes(env) {
@@ -281,6 +285,7 @@ function rowMetadata(row) {
     date: row.date,
     timestamp: row.timestamp,
     time_ms: row.time_ms,
+    tickrate: row.tickrate ?? null,
     sha256: row.sha256,
     size: row.size,
     created_at: row.created_at,
@@ -288,7 +293,7 @@ function rowMetadata(row) {
 }
 
 async function handleUpload(request, env) {
-  authenticateUpload(request, env);
+  authenticate(request, env);
   requireBinding(env, "REPLAYS");
 
   const metadata = parseUploadMetadata(request);
@@ -327,6 +332,7 @@ async function handleUpload(request, env) {
     date: metadata.date,
     timestamp: String(metadata.timestamp),
     time_ms: String(metadata.timeMs),
+    tickrate: metadata.tickrate === null ? "" : String(metadata.tickrate),
     sha256,
     size: String(body.byteLength),
   };
@@ -345,13 +351,13 @@ async function handleUpload(request, env) {
     const result = await env.DB.prepare(`
       INSERT OR IGNORE INTO replays
       (uuid, key, map, category, course, course_str, steamid64, mode, timetype,
-       jumptype, block, reason, date, timestamp, time_ms, sha256, size, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       jumptype, block, reason, date, timestamp, time_ms, tickrate, sha256, size, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       metadata.uuid, metadata.key, metadata.map, metadata.category, metadata.course,
       metadata.courseStr, metadata.steamid64, metadata.mode, metadata.timetype,
       metadata.jumptype, metadata.block, metadata.reason, metadata.date,
-      metadata.timestamp, metadata.timeMs, sha256, body.byteLength, createdAt,
+      metadata.timestamp, metadata.timeMs, metadata.tickrate, sha256, body.byteLength, createdAt,
     ).run();
 
     const inserted = Number(result.meta?.changes || 0) > 0;
@@ -416,6 +422,7 @@ function escapeLikePrefix(value) {
 }
 
 async function handleList(request, env) {
+  authenticate(request, env);
   const db = requireBinding(env, "DB");
   const url = new URL(request.url);
   const map = (url.searchParams.get("map") || "").trim().toLowerCase();
@@ -446,7 +453,7 @@ async function handleList(request, env) {
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await db.prepare(`
     SELECT uuid, key, map, category, course, course_str, steamid64, mode, timetype,
-           jumptype, block, reason, date, timestamp, time_ms, sha256, size, created_at
+           jumptype, block, reason, date, timestamp, time_ms, tickrate, sha256, size, created_at
     FROM replays ${where} ORDER BY timestamp DESC LIMIT ?
   `).bind(...values, limit).all();
   return json(env, { items: result.results || [], count: result.results?.length || 0, limit });

@@ -22,6 +22,9 @@
 - [ ] 键名符合 `docs/DEVELOPMENT.md §2.2`（小写、日期 `yyyy.MM.dd.HH.mm.ss`、地图置顶、不含 `style`）
 - [ ] `UUIDv4` 且 `X-UUID` 正确传递，`staging` 文件名带 `UUID`
 - [ ] 聊天回显仅对完成者本人且仅 `runs`（`jumps/cheaters` 仅日志，除非 `replay_vault_announce_jumps=1`）
+- [ ] 自建录制器：`GOKZ_RP_OnTimerEnd_Post` 去重生效（上游已保存的局不重复上传），`replay_vault_record_all=0` 时行为回退
+- [ ] 自建录像头字段 / `deltaFlags` 压缩与 `gokz-replays` v2 写入一致，`gokz-replays` 能正常播放
+- [ ] `!rv` 菜单 `[异图]` 项选中只提示切图、不发起下载
 - [ ] `STRICT=1 ./build.sh` 零警告，产物仅 `1` 个 `replay-vault.smx`
 
 ## 测试

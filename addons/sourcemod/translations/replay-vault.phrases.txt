@@ -14,8 +14,18 @@
     // =====[ IN-GAME VIEWER (!rv) ]=====
     "Replay View Menu Title"
     {
-        "en"    "Your recent replays"
-        "chi"   "你最近的录像"
+        "en"    "Your recent replays (This map = playable here)"
+        "chi"   "你最近的录像（本图 = 当前服务器可播放）"
+    }
+    "Replay View Menu Current Map Tag"
+    {
+        "en"    "[This map] "
+        "chi"   "[本图] "
+    }
+    "Replay View Menu Other Map Tag"
+    {
+        "en"    "[Other map] "
+        "chi"   "[异图] "
     }
     "Replay View Disabled"
     {

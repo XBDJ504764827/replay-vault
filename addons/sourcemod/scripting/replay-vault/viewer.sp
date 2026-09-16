@@ -694,16 +694,21 @@ public void RV_OnListCompleted(Handle hRequest, bool bFailure, bool bRequestSucc
     Menu menu = new Menu(MenuHandler_ReplayList);
     menu.SetTitle("%T", "Replay View Menu Title", client);
 
-    char uuid[64], label[128];
+    char info[160], label[160];
     for (int i = 0; i < count; i++)
     {
         JSON_Object item = items.GetObject(i);
         if (item == null) continue;
+        char uuid[64], map[64];
         uuid[0] = '\0';
+        map[0] = '\0';
         item.GetString("uuid", uuid, sizeof(uuid));
+        item.GetString("map", map, sizeof(map));
         if (uuid[0] == '\0') continue;
-        RV_BuildListItemLabel(item, label, sizeof(label));
-        menu.AddItem(uuid, label);
+        RV_BuildListItemLabel(item, client, map, label, sizeof(label));
+        // info = uuid|map：选择时先用 map 判断是否为当前地图，避免白跑一次下载。
+        FormatEx(info, sizeof(info), "%s|%s", uuid, map);
+        menu.AddItem(info, label);
     }
 
     root.Cleanup();
@@ -721,8 +726,24 @@ public int MenuHandler_ReplayList(Menu menu, MenuAction action, int param1, int 
 {
     if (action == MenuAction_Select)
     {
-        char uuid[64];
-        menu.GetItem(param2, uuid, sizeof(uuid));
+        char info[160], uuid[64], map[64];
+        menu.GetItem(param2, info, sizeof(info));
+
+        char parts[2][64];
+        if (ExplodeString(info, "|", parts, 2, sizeof(parts[])) != 2)
+        {
+            RV_RequestView(param1, info);
+            return 0;
+        }
+        strcopy(uuid, sizeof(uuid), parts[0]);
+        strcopy(map, sizeof(map), parts[1]);
+
+        // 必须与本服当前地图一致（同服同图，或另一台装了插件的服务器正在同一张图）。
+        if (map[0] != '\0' && !StrEqual(map, gC_CurrentMap, false))
+        {
+            RV_ViewReply(param1, "Replay View Wrong Map", map);
+            return 0;
+        }
         RV_RequestView(param1, uuid);
     }
     else if (action == MenuAction_End)
@@ -732,33 +753,46 @@ public int MenuHandler_ReplayList(Menu menu, MenuAction action, int param1, int 
     return 0;
 }
 
-static void RV_BuildListItemLabel(JSON_Object item, char[] label, int maxlen)
+static void RV_BuildListItemLabel(JSON_Object item, int client, const char[] map,
+    char[] label, int maxlen)
 {
-    char category[16], map[64], mode[16], timetype[16], courseStr[16], jumptype[32];
+    char category[16], mode[16], timetype[16], courseStr[16], jumptype[32];
     category[0] = '\0';
-    map[0] = '\0';
     mode[0] = '\0';
     timetype[0] = '\0';
     courseStr[0] = '\0';
     jumptype[0] = '\0';
     item.GetString("category", category, sizeof(category));
-    item.GetString("map", map, sizeof(map));
     item.GetString("mode", mode, sizeof(mode));
     item.GetString("timetype", timetype, sizeof(timetype));
     item.GetString("course_str", courseStr, sizeof(courseStr));
     item.GetString("jumptype", jumptype, sizeof(jumptype));
 
+    char base[128];
     if (StrEqual(category, "run"))
     {
         if (courseStr[0] == '\0') strcopy(courseStr, sizeof(courseStr), "main");
-        FormatEx(label, maxlen, "%s %s %s %s", map, courseStr, mode, timetype);
+        FormatEx(base, sizeof(base), "%s %s %s %s", map, courseStr, mode, timetype);
     }
     else if (StrEqual(category, "jump"))
     {
-        FormatEx(label, maxlen, "%s %s %s", map, mode, jumptype);
+        FormatEx(base, sizeof(base), "%s %s %s", map, mode, jumptype);
     }
     else
     {
-        FormatEx(label, maxlen, "%s %s cheat", map, mode);
+        FormatEx(base, sizeof(base), "%s %s cheat", map, mode);
     }
+
+    // 标注是否可以在本服直接播放（必须同图）。
+    char tag[64];
+    if (StrEqual(map, gC_CurrentMap, false))
+    {
+        strcopy(tag, sizeof(tag), "Replay View Menu Current Map Tag");
+    }
+    else
+    {
+        strcopy(tag, sizeof(tag), "Replay View Menu Other Map Tag");
+    }
+    SetGlobalTransTarget(client);
+    FormatEx(label, maxlen, "%t%s", tag, base);
 }

@@ -1,27 +1,11 @@
-// helpers.sp - key building, date, file copy, sanitizers
+// helpers/utils.sp - Common utilities for replay-vault
+// Extracted from helpers.sp to reduce file size and improve maintainability
 
 #define RV_MAX_KEY_LENGTH 512
 #define RV_MAX_DATE_LENGTH 32
 #define RV_STAGING_DIR "data/replay-vault/staging"
-#define RV_CACHE_DIR "data/replay-vault/cache"
 
-int gI_StageCounter; // staging filename dedup
-
-void RV_OnMapStart_Helpers()
-{
-    char map[64];
-    GetCurrentMapDisplayName(map, sizeof(map));
-    RV_SanitizeMap(map, gC_CurrentMap, sizeof(gC_CurrentMap));
-    if (!RV_EnsureDir(RV_STAGING_DIR))
-    {
-        LogError("[replay-vault] Failed to create staging directory: %s", RV_STAGING_DIR);
-    }
-    if (!RV_EnsureDir(RV_CACHE_DIR))
-    {
-        LogError("[replay-vault] Failed to create cache directory: %s", RV_CACHE_DIR);
-    }
-}
-
+// Helper functions for string manipulation and path handling
 void RV_ToLower(const char[] input, char[] output, int maxlen)
 {
     if (maxlen <= 0) return;
@@ -36,7 +20,6 @@ void RV_ToLower(const char[] input, char[] output, int maxlen)
     output[len] = '\0';
 }
 
-// Lowercase a path segment and replace separators/unsupported characters.
 void RV_SanitizeSegment(const char[] input, char[] output, int maxlen)
 {
     if (maxlen <= 0) return;
@@ -59,6 +42,11 @@ void RV_SanitizeSegment(const char[] input, char[] output, int maxlen)
     output[out] = '\0';
 }
 
+void RV_SanitizeMap(const char[] input, char[] output, int maxlen)
+{
+    RV_SanitizeSegment(input, output, maxlen);
+}
+
 void RV_CourseToString(int course, char[] buf, int maxlen)
 {
     if (course == 0) strcopy(buf, maxlen, "main");
@@ -77,25 +65,6 @@ void RV_ModeToString(int mode, char[] buf, int maxlen)
     RV_ToLower(tmp, buf, maxlen);
 }
 
-int RV_ModeFromString(const char[] mode)
-{
-    for (int i = 0; i < MODE_COUNT; i++)
-    {
-        if (StrEqual(mode, gC_ModeNamesShort[i], false)) return i;
-    }
-    return -1;
-}
-
-void RV_JumpTypeToString(int jumptype, char[] buf, int maxlen)
-{
-    if (jumptype >= 0 && jumptype < JUMPTYPE_COUNT)
-    {
-        RV_SanitizeSegment(gC_JumpTypeKeys[jumptype], buf, maxlen);
-        return;
-    }
-    FormatEx(buf, maxlen, "%d", jumptype);
-}
-
 void RV_TimeTypeToString(int timeType, char[] buf, int maxlen)
 {
     if (timeType < 0 || timeType >= TIMETYPE_COUNT)
@@ -108,18 +77,10 @@ void RV_TimeTypeToString(int timeType, char[] buf, int maxlen)
     RV_ToLower(tmp, buf, maxlen);
 }
 
-// GetTime() -> yyyy.MM.dd.HH.mm.ss (Beijing +8h via +28800; FormatTime is GMT when 2nd arg omitted on Linux)
-// We add 8h offset explicitly so yyyy matches Beijing regardless of server TZ.
 void RV_FormatDate(int timestamp, char[] buf, int maxlen)
 {
     int beijing = timestamp + 8 * 3600;
     FormatTime(buf, maxlen, "%Y.%m.%d.%H.%M.%S", beijing);
-}
-
-// Map sanitize: lower, '/' -> '_' , keep a-z0-9_- .
-void RV_SanitizeMap(const char[] input, char[] output, int maxlen)
-{
-    RV_SanitizeSegment(input, output, maxlen);
 }
 
 void RV_GetFileName(const char[] path, char[] output, int maxlen)
@@ -133,7 +94,14 @@ void RV_GetFileName(const char[] path, char[] output, int maxlen)
     else strcopy(output, maxlen, path[lastSlash + 1]);
 }
 
-static bool RV_EnsureAbsoluteDir(const char[] path)
+bool RV_EnsureDir(const char[] dir)
+{
+    char path[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, path, sizeof(path), "%s", dir);
+    return RV_EnsureAbsoluteDir(path);
+}
+
+bool RV_EnsureAbsoluteDir(const char[] path)
 {
     if (DirExists(path)) return true;
 
@@ -160,14 +128,6 @@ static bool RV_EnsureAbsoluteDir(const char[] path)
     return CreateDirectory(path, 511) || DirExists(path);
 }
 
-bool RV_EnsureDir(const char[] dir)
-{
-    char path[PLATFORM_MAX_PATH];
-    BuildPath(Path_SM, path, sizeof(path), "%s", dir);
-    return RV_EnsureAbsoluteDir(path);
-}
-
-// Build run key: {map}/runs/{course}/{steamid64}/{mode}/{timetype}/{date}_{uuid}.replay
 void RV_BuildRunKey(const char[] map, const char[] courseStr, const char[] steamid64,
     const char[] mode, const char[] timetype, const char[] date, const char[] uuid,
     char[] key, int maxlen)
@@ -182,7 +142,6 @@ void RV_BuildRunKey(const char[] map, const char[] courseStr, const char[] steam
         safeMap, safeCourse, safeSteamID, safeMode, safeTimeType, date, uuid);
 }
 
-// Build jump key (with optional block)
 void RV_BuildJumpKey(const char[] map, const char[] steamid64, const char[] mode,
     const char[] jumpType, int block, const char[] date, const char[] uuid,
     char[] key, int maxlen)
@@ -200,7 +159,6 @@ void RV_BuildJumpKey(const char[] map, const char[] steamid64, const char[] mode
             safeMap, safeSteamID, safeMode, jumpLower, date, uuid);
 }
 
-// Build cheater key
 void RV_BuildCheaterKey(const char[] map, const char[] steamid64, const char[] mode,
     const char[] reason, const char[] date, const char[] uuid,
     char[] key, int maxlen)
@@ -212,26 +170,6 @@ void RV_BuildCheaterKey(const char[] map, const char[] steamid64, const char[] m
     RV_SanitizeSegment(reason, reasonLower, sizeof(reasonLower));
     FormatEx(key, maxlen, "%s/cheaters/%s/%s/%s/%s_%s.replay",
         safeMap, safeSteamID, safeMode, reasonLower, date, uuid);
-}
-
-// Parse run filename {course}_{MODE}_{STYLE}_{TIMETYPE}.replay -> course/modeShort/timetype (fallback)
-stock bool RV_ParseRunFileNameLocal(const char[] fileName, int &course, char[] modeShort, int modeShortLen, char[] typeStr, int typeStrLen)
-{
-    char buf[PLATFORM_MAX_PATH];
-    strcopy(buf, sizeof(buf), fileName);
-    int dot = StrContains(buf, ".replay");
-    if (dot == -1) return false;
-    buf[dot] = '\0';
-    char parts[8][32];
-    int n = ExplodeString(buf, "_", parts, sizeof(parts), sizeof(parts[]));
-    if (n < 4) return false;
-    int base = n - 4;
-    course = StringToInt(parts[base]);
-    strcopy(modeShort, modeShortLen, parts[base + 1]);
-    RV_ToLower(modeShort, modeShort, modeShortLen);
-    if (StrEqual(parts[base + 3], "PRO", false)) strcopy(typeStr, typeStrLen, "pro");
-    else strcopy(typeStr, typeStrLen, "nub");
-    return true;
 }
 
 bool RV_GetSteamID64(int client, char[] buf, int maxlen)
@@ -248,11 +186,9 @@ bool RV_GetSteamID64(int client, char[] buf, int maxlen)
     }
     int acc = GetSteamAccountID(client);
     if (acc == 0) return false;
-    // Fallback: base 76561197960265728 + accountID via string addition (cells are 32-bit, cannot hold 64-bit)
     char base[] = "76561197960265728";
     char accStr[16];
     IntToString(acc, accStr, sizeof(accStr));
-    // Add base + accStr as decimal strings
     int i = strlen(base) - 1;
     int j = strlen(accStr) - 1;
     int carry = 0;
@@ -267,38 +203,12 @@ bool RV_GetSteamID64(int client, char[] buf, int maxlen)
         carry = sum / 10;
         i--; j--;
     }
-    // reverse
     for (int k = 0; k < pos; k++)
     {
         buf[k] = rev[pos - 1 - k];
     }
     buf[pos] = '\0';
     return buf[0] != '\0';
-}
-
-static bool RV_ResolveSourcePath(const char[] source, char[] output, int maxlength)
-{
-    if (source[0] == '/' || (source[1] == ':' && ((source[0] >= 'A' && source[0] <= 'Z') || (source[0] >= 'a' && source[0] <= 'z'))))
-    {
-        strcopy(output, maxlength, source);
-        return true;
-    }
-    if (StrContains(source, "addons/") == 0)
-    {
-        char gameDir[PLATFORM_MAX_PATH];
-        BuildPath(Path_SM, gameDir, sizeof(gameDir), "");
-        int slashPos = StrContains(gameDir, "/addons/sourcemod");
-        if (slashPos == -1) slashPos = StrContains(gameDir, "\\addons\\sourcemod");
-        if (slashPos != -1)
-        {
-            gameDir[slashPos] = '\0';
-            Format(output, maxlength, "%s/%s", gameDir, source);
-        }
-        else strcopy(output, maxlength, source);
-        return true;
-    }
-    BuildPath(Path_SM, output, maxlength, "%s", source);
-    return true;
 }
 
 bool RV_FileCopy(const char[] source, const char[] destination)
@@ -358,99 +268,27 @@ bool RV_StageFile(const char[] source, const char[] uuid, char[] stagingPath, in
     return RV_FileCopy(source, stagingPath);
 }
 
-// Reads a length-prefixed header string (int8 length + bytes) without desyncing
-// the stream when the stored length exceeds the caller's buffer.
-static bool RV_ReadHeaderString(File file, char[] buffer, int maxlen)
+void RV_ResolveSourcePath(const char[] source, char[] output, int maxlength)
 {
-    int len;
-    if (!file.ReadInt8(len) || len < 0 || len > 127) return false;
-    char tmp[128];
-    if (!file.ReadString(tmp, sizeof(tmp), len)) return false;
-    strcopy(buffer, maxlen, tmp);
-    return true;
-}
-
-// Reads a GOKZ replay header without loading tick data.
-// v1 replays have no replay type (always a run) and no tickrate field
-// (GOKZ v1 playback hard-codes 128 tick).
-// Returns false when the file is missing or not a GOKZ replay.
-bool RV_ParseReplayHeader(const char[] path, int &replayType, int &tickrate,
-    char[] mapName, int mapLen)
-{
-    replayType = ReplayType_Run;
-    tickrate = 0;
-    if (mapLen > 0) mapName[0] = '\0';
-
-    File file = OpenFile(path, "rb");
-    if (file == null) return false;
-
-    int magic;
-    if (!file.ReadInt32(magic) || magic != RP_MAGIC_NUMBER)
+    if (source[0] == '/' || (source[1] == ':' && ((source[0] >= 'A' && source[0] <= 'Z') || (source[0] >= 'a' && source[0] <= 'z'))))
     {
-        delete file;
-        return false;
+        strcopy(output, maxlength, source);
+        return;
     }
-
-    int version;
-    if (!file.ReadInt8(version))
+    if (StrContains(source, "addons/") == 0)
     {
-        delete file;
-        return false;
+        char gameDir[PLATFORM_MAX_PATH];
+        BuildPath(Path_SM, gameDir, sizeof(gameDir), "");
+        int slashPos = StrContains(gameDir, "/addons/sourcemod");
+        if (slashPos == -1) slashPos = StrContains(gameDir, "\\addons\\sourcemod");
+        if (slashPos != -1)
+        {
+            gameDir[slashPos] = '\0';
+            Format(output, maxlength, "%s/%s", gameDir, source);
+        }
+        else strcopy(output, maxlength, source);
+        return;
     }
-
-    // v2 stores the replay type right after the format version; v1 has none.
-    replayType = ReplayType_Run;
-    if (version >= 2 && !file.ReadInt8(replayType))
-    {
-        delete file;
-        return false;
-    }
-
-    char gokzVersion[32];
-    if (!RV_ReadHeaderString(file, gokzVersion, sizeof(gokzVersion))
-        || !RV_ReadHeaderString(file, mapName, mapLen))
-    {
-        delete file;
-        return false;
-    }
-
-    if (version == 1)
-    {
-        tickrate = 128;
-        replayType = ReplayType_Run;
-        if (gCV_Debug != null && gCV_Debug.BoolValue)
-            LogMessage("[replay-vault] Replay header v1 map=%s gokz=%s tickrate=%d",
-                mapName, gokzVersion, tickrate);
-        delete file;
-        return true;
-    }
-    if (version != 2)
-    {
-        delete file;
-        return false;
-    }
-
-    int mapFileSize, serverIP, timestamp, steamAccountID, mode, style;
-    int rawSensitivity, rawMYaw, rawTickrate;
-    char alias[MAX_NAME_LENGTH];
-    if (!file.ReadInt32(mapFileSize) || !file.ReadInt32(serverIP) || !file.ReadInt32(timestamp)
-        || !RV_ReadHeaderString(file, alias, sizeof(alias))
-        || !file.ReadInt32(steamAccountID) || !file.ReadInt8(mode) || !file.ReadInt8(style)
-        || !file.ReadInt32(rawSensitivity) || !file.ReadInt32(rawMYaw) || !file.ReadInt32(rawTickrate))
-    {
-        delete file;
-        return false;
-    }
-
-    // tickrate and the player view values are stored as float bit patterns.
-    tickrate = RoundToZero(view_as<float>(rawTickrate));
-    if (gCV_Debug != null && gCV_Debug.BoolValue)
-    {
-        LogMessage("[replay-vault] Replay header v2 type=%d map=%s gokz=%s tickrate=%d size=%d ip=%d ts=%d alias=%s steam=%d mode=%d style=%d sens=%.3f myaw=%.3f",
-            replayType, mapName, gokzVersion, tickrate, mapFileSize, serverIP, timestamp,
-            alias, steamAccountID, mode, style,
-            view_as<float>(rawSensitivity), view_as<float>(rawMYaw));
-    }
-    delete file;
-    return true;
+    BuildPath(Path_SM, output, maxlength, "%s", source);
+    return;
 }

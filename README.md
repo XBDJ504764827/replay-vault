@@ -1,12 +1,16 @@
 # replay-vault
 
-CS:GO GOKZ 落盘录像备份插件 — `gokz-replays` 只要落盘（完成：破纪录 + 破 PB 未破纪录，含 Bonus/NUB-PRO；跳远/作弊）就异步上传到 Cloudflare R2（Worker 中转），按 `UUID` 命名，比 PB 慢的不落盘不上传，完成即在聊天框回显 `UUID` 供玩家按 `UUID` 检索下载，R2 侧 3 天自动删除。
+CS:GO GOKZ 全量录像备份插件 — 玩家**每次完成地图**（无论是否破服纪录 / 自己的 PB / WR，含 `Bonus`/`NUB`/`PRO`）都由插件自建录制器落盘并异步上传到 Cloudflare R2（Worker 中转），跳远/作弊录像同样上传；按 `UUID` 命名永不覆盖，完成即在聊天框回显 `UUID` 供玩家按 `UUID` 检索下载，R2 侧 3 天自动删除。
 
-> 与 `stratosphere` 区分：`stratosphere` 仅备份 `WR`（`wr/{mode}/{map}/{tp|pro}.replay` 最快者胜覆盖），`replay-vault` 是**落盘即备份**（`{map}/runs|jumps|cheaters/.../{date}_{uuid}.replay` 每份独立，3 天生命周期）。
+游戏内可直接用 `!rv <UUID>` 回看录像：本地缓存命中直接播放，未命中则从 R2 下载到服务器缓存后再播。
+
+> 与 `stratosphere` 区分：`stratosphere` 仅备份 `WR`（`wr/{mode}/{map}/{tp|pro}.replay` 最快者胜覆盖），`replay-vault` 是**完成即备份**（`{map}/runs|jumps|cheaters/.../{date}_{uuid}.replay` 每份独立，3 天生命周期）。
+
+> **关于「比 PB 慢的完成」**：上游 `gokz-replays` 在玩家慢于自己 PB 时会停止录制并直接丢弃录像，插件拿不到文件。为此 `replay-vault` 内置自建录制器（`replay-vault/recorder.sp`，`replay_vault_record_all` 开关）自行按 tick 录制整局（含播放端要求的 2 秒 pre-run 段），写成与上游一致的 v2 `.replay` 后走同一条上传链路，从而做到**全部完成都上传**。上游自身保存的录像（破纪录 / 破 PB）仍走原 `GOKZ_RP_OnReplaySaved` 上传，插件通过 `GOKZ_RP_OnTimerEnd_Post` 去重，不会重复上传。
 
 ## 特性
 
-- 📦 **落盘即上传**：完成录像（破纪录 + 破 PB 未破纪录，含 Bonus/NUB-PRO，比 PB 慢的不落盘不上传）+ 跳远/作弊录像，只要落盘就上传，零改上游
+- 📦 **完成即上传**：每次完成地图（破服纪录 / 破 PB / 未破 PB，含 Bonus/NUB-PRO）都上传；插件自建录制器补全上游丢弃的「慢于 PB」录像，跳远/作弊同样上传，零改上游
 - 🗺️ **地图置顶键名**：`kz_map/runs/main/{steamid64}/kzt/pro/{date}_{uuid}.replay`，便于按图/人前缀查询
 - 🔑 **UUID 命名**：插件端 `UUIDv4` 生成，`X-UUID` 传 Worker，文件名为 `年.月.日.时.分.秒_uuid.replay`（北京时间，点分隔）
 - 💬 **聊天回显**：完成录像上传成功后向完成者回显 `录像已上传 UUID: xxxxxxxx-...`
@@ -14,7 +18,9 @@ CS:GO GOKZ 落盘录像备份插件 — `gokz-replays` 只要落盘（完成：�
 - 🔐 **Worker 中转**：`SteamWorks` + `X-API-Key` + 可选 `X-SHA256`，不在 `Pawn` 层做 `R2` 签名
 - 🧱 **单一 SMX**：`replay-vault.sp` + `replay-vault/` 模块目录，仅产出一个 `replay-vault.smx`
 - ⏰ **3 天生命周期**：R2 `Lifecycle Expiration 3 days` + D1 每日 Cron 清理过期 `uuid→key`，到期自动删除
-- 🔇 **纯后台**：无命令、无菜单
+- 🎬 **游戏内回看**：`!rv <UUID>` 直接播放，`!rv` 无参数列出自己最近的录像；本地缓存优先，未命中才从 R2 下载
+- 🗄️ **本地缓存**：上传成功即把 `staging/{uuid}` 同盘改名进 `data/replay-vault/cache/`，回看零回源；按 72 小时 + 容量上限淘汰
+- 🔇 **无菜单侵入**：除 `!rv` / `!vault` 外不新增任何菜单
 
 ## 键名约定
 
@@ -32,14 +38,43 @@ kz_bhop_league/runs/main/76561198123456789/kzt/pro/2025.08.24.14.30.45_a1b2c3d4-
 
 不含 `style`（当前 `STYLE_COUNT==1` 仅 `Normal`，为简洁省略；未来若新增风格再在 `mode` 后追加层，详见 `docs/DEVELOPMENT.md §2`）。
 
+## 游戏内回看
+
+| 命令 | 说明 |
+| --- | --- |
+| `!rv <UUID>` / `!vault <UUID>` | 回看该 UUID 的录像 |
+| `!rv` / `!vault` | 打开自己最近录像的菜单（按 `steamid64` 从 Worker `/list` 拉取，列出全部地图并用 `[本图]` / `[异图]` 标注） |
+
+流程：`UUID` → `data/replay-vault/cache/{uuid}.replay` 命中就直接播放；未命中先 `GET /replay/{uuid}?meta=1` 预检，再 `GET /replay/{uuid}` 异步下载进缓存后播放。播放由 `gokz-replays` 的 `GOKZ_RP_LoadJumpReplay`（实现为通用 `LoadReplayBot`，`Run`/`Jump` 均可播）完成，玩家自动进入观察者视角，`!rpcontrols` 打开回放控制。
+
+约束与说明：
+
+- **必须同一张图**：`!rv` 菜单列出全部地图的录像，但只有与本服当前地图一致的才能播放（另一台装了 `replay-vault` 的服务器只要正在同一张图，也能从 R2 下载并播放）；菜单里 `[异图]` 项被选中时会直接提示需切换地图，不会触发下载。
+- **必须同一 tickrate**：`gokz-replays` 会校验录像头里的地图名与 `tickrate`，不满足会明确提示（多服务器不同 tick 时尤其注意）。
+- **权限**：任何持有 `UUID` 的人都能播放；`cheaters` 类录像仅管理员（`replay_vault_admin` override，默认 `ADMFLAG_GENERIC`）可播。
+- **并发上限**：`gokz-replays` 回放 bot 上限 4 个；插件另有每玩家冷却与全局任务上限。
+- 玩家正在计时且开启 safeguard 时会被 `gokz-replays` 拒绝，需先 `!stop`。
+
 ## 目录结构
 
 ```
 addons/sourcemod/scripting/replay-vault.sp        # 唯一入口
 addons/sourcemod/scripting/replay-vault/           # 模块目录
+  convars.sp                                       # ConVar
+  helpers.sp                                       # 键名/日期/文件/录像头解析
+  uuid.sp                                          # UUIDv4 生成 + 校验
+  upload.sp                                        # 落盘事件的 SteamWorks 上传
+  cache.sp                                         # 本地缓存提升与淘汰
+  viewer.sp                                        # !rv 查看器（命令/菜单/下载/播放）
+  events.sp                                        # 录像落盘事件处理
+  recorder.sp                                      # 自建录制器（全部完成都上传，零改上游）
 addons/sourcemod/scripting/include/replay-vault/   # version.inc
 addons/sourcemod/translations/                     # replay-vault.phrases.txt
 cfg/sourcemod/replay-vault.cfg                     # 运行时幂等生成（已存在不覆盖）
+worker/                                            # Cloudflare Worker（R2 + D1）
+  src/index.js
+  schema.sql / migration-add-tickrate.sql
+  test/worker.test.mjs
 docs/DEVELOPMENT.md                                # 开发文档（唯一依据）
 build.sh                                           # 编译脚本
 .github/workflows/pr-check.yml                     # PR: develop→main 编译审查 + 测试包
@@ -63,10 +98,13 @@ STRICT=1 ./build.sh  # 警告即错误（CI 用）
 
 > 配置文件首次启动自动创建，已存在不覆盖，仅补齐新增 `ConVar`。后续更新 Release 包不会覆盖服务器配置。
 
+> **升级既有部署（Worker 侧）**：本版本起 D1 `replays` 表新增 `tickrate` 列，且 `/list` 需要 `X-API-Key`。旧库先执行 `worker/migration-add-tickrate.sql`，再 `wrangler deploy`；全新部署直接用更新后的 `worker/schema.sql`。`GET /replay/{uuid}` 仍保持公开，下载站无需改动。
+
 ## 依赖
 
 - SourceMod 1.11（`spcomp64`）
 - SteamWorks 扩展
+- MovementAPI（`movementapi`，GOKZ 依赖；自建录制器读取 tick 数据用）
 - GOKZ + gokz-replays
 - Cloudflare Worker（新建 `replay-vault` Worker，协议见 `docs/DEVELOPMENT.md §3`）
 

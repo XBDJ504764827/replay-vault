@@ -7,6 +7,8 @@
 
 int gI_StageCounter; // staging filename dedup
 
+#define RV_COPY_BUFFER_CELLS 4096 // 文件拷贝缓冲（4096 cells = 16KB；大录像拷贝减少循环次数）
+
 void RV_OnMapStart_Helpers()
 {
     char map[64];
@@ -318,7 +320,7 @@ bool RV_FileCopy(const char[] source, const char[] destination)
         delete src;
         return false;
     }
-    int buffer[2048];
+    int buffer[RV_COPY_BUFFER_CELLS];
     int count;
     bool ok = true;
     while ((count = src.Read(buffer, sizeof(buffer), 1)) > 0)

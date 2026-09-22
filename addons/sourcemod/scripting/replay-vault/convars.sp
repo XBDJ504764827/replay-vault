@@ -11,6 +11,8 @@ ConVar gCV_RecordAll;
 ConVar gCV_RecordMaxMinutes;
 ConVar gCV_RetryInterval;
 ConVar gCV_StagingMaxAge;
+ConVar gCV_MaxConcurrent;
+ConVar gCV_UploadGap;
 ConVar gCV_ViewEnabled;
 ConVar gCV_CacheMaxAge;
 ConVar gCV_CacheMaxMB;
@@ -46,6 +48,11 @@ void RV_CreateConVars()
         "Staging retry scan interval seconds (min 15)", _, true, 15.0, true, 3600.0);
     gCV_StagingMaxAge = AutoExecConfig_CreateConVar("replay_vault_staging_max_age", "24",
         "Hours before giving up on staged replay uploads (min 1)", _, true, 1.0, true, 168.0);
+    gCV_MaxConcurrent = AutoExecConfig_CreateConVar("replay_vault_max_concurrent", "2",
+        "Max uploads in flight at once (1-4); excess stays in staging until the retry scanner picks it up",
+        _, true, 1.0, true, 4.0);
+    gCV_UploadGap = AutoExecConfig_CreateConVar("replay_vault_upload_gap", "3",
+        "Minimum seconds between two upload transmissions (0=unlimited, up to 300); smooths short-map completion bursts", _, true, 0.0, true, 300.0);
 
     gCV_ViewEnabled = AutoExecConfig_CreateConVar("replay_vault_view_enabled", "1",
         "Enable the in-game !rv <uuid> replay viewer (0=disabled)", _, true, 0.0, true, 1.0);
@@ -60,6 +67,17 @@ void RV_CreateConVars()
 
     AutoExecConfig_ExecuteFile();
     AutoExecConfig_CleanFile();
+
+    // 录制门控相关的 ConVar 变化时刷新缓存判定（每 tick 早退依据不能读字符串 ConVar）
+    gCV_Enabled.AddChangeHook(RV_OnConVarChanged);
+    gCV_Url.AddChangeHook(RV_OnConVarChanged);
+    gCV_Key.AddChangeHook(RV_OnConVarChanged);
+    gCV_RecordAll.AddChangeHook(RV_OnConVarChanged);
+}
+
+public void RV_OnConVarChanged(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+    RV_RecRefreshCaptureGate();
 }
 
 bool RV_CanUpload()

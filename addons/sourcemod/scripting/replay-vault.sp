@@ -60,6 +60,7 @@ public void OnAllPluginsLoaded()
 {
     RV_UpdateDependencies();
     RV_UpdateRecorderDeps();
+    RV_RecRefreshCaptureGate();
     if (!gB_SteamWorksOK)
     {
         LogError("[replay-vault] SteamWorks extension is not loaded; uploads are disabled");
@@ -79,6 +80,11 @@ public void OnLibraryAdded(const char[] name)
     if (StrEqual(name, "SteamWorks.ext", false) || StrEqual(name, "SteamWorks", false))
     {
         RV_UpdateDependencies();
+        RV_RecRefreshCaptureGate();
+    }
+    if (StrEqual(name, "movementapi", false))
+    {
+        RV_UpdateRecorderDeps();
     }
     if (StrEqual(name, "movementapi", false))
     {
@@ -91,6 +97,11 @@ public void OnLibraryRemoved(const char[] name)
     if (StrEqual(name, "SteamWorks.ext", false) || StrEqual(name, "SteamWorks", false))
     {
         gB_SteamWorksOK = false;
+        RV_RecRefreshCaptureGate();
+    }
+    if (StrEqual(name, "movementapi", false))
+    {
+        RV_UpdateRecorderDeps();
     }
     if (StrEqual(name, "movementapi", false))
     {

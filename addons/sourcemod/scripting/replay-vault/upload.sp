@@ -14,6 +14,13 @@
 static const int RV_RETRY_DELAYS_MIN[] = { 2, 10, 30, 120, 360, 720 };
 #define RV_STAGING_MAX_ATTEMPTS (sizeof(RV_RETRY_DELAYS_MIN) + 1)
 
+// 全局节流：同时在途 POST 上限 + 相邻两次发送的最小间隔。
+// 短图连刷时突发上传被摊平；超出的 staging 文件由扫描器按 retry_interval 兜底重发。
+#define RV_MAX_CONCURRENT 4      // 在途请求硬上限（并发超过会挤占带宽/连接）
+#define RV_MIN_UPLOAD_GAP 0      // 相邻发送最小间隔秒（0 = 不限）
+int gI_InFlightCount;            // 当前在途 POST 数
+int gI_LastUploadTime;           // 上一次实际发送的 Unix 时间（节流用）
+
 // staging 伴生元数据（{uuid}.meta），跨图/重启后可恢复重试所需的全部上传头字段
 enum struct ReplayStageMeta
 {
@@ -54,11 +61,15 @@ void RV_InitStagingScanner()
 void RV_MarkInFlight(const char[] uuid)
 {
 	gM_InFlight.SetValue(uuid, GetTime(), true);
+	gI_InFlightCount++;
 }
 
 void RV_ClearInFlight(const char[] uuid)
 {
-	gM_InFlight.Remove(uuid);
+	if (gM_InFlight.Remove(uuid))
+	{
+		if (gI_InFlightCount > 0) gI_InFlightCount--;
+	}
 }
 
 bool RV_IsInFlightFresh(const char[] uuid)
@@ -189,6 +200,102 @@ bool RV_ShouldAnnounceKey(const char[] key)
                  : (gCV_AnnounceJumps != null && gCV_AnnounceJumps.BoolValue);
 }
 
+// 全局发送预算：同时在途请求数 + 相邻发送间隔。预算不足时返回 false，
+// 调用方应保留 staging 文件原样不动（扫描器稍后兜底重发），相当于一个平滑发送队列。
+bool RV_UploadBudgetAvailable()
+{
+    int maxConcurrent = gCV_MaxConcurrent != null ? gCV_MaxConcurrent.IntValue : 2;
+    if (maxConcurrent < 1) maxConcurrent = 1;
+    if (maxConcurrent > RV_MAX_CONCURRENT) maxConcurrent = RV_MAX_CONCURRENT;
+
+    int gap = gCV_UploadGap != null ? gCV_UploadGap.IntValue : RV_MIN_UPLOAD_GAP;
+    if (gap < 0) gap = 0;
+    if (gap > 300) gap = 300;
+
+    if (gI_InFlightCount >= maxConcurrent) return false;
+    if (gap > 0 && gI_LastUploadTime != 0 && GetTime() - gI_LastUploadTime < gap) return false;
+    return true;
+}
+
+// 首发前写新 meta；重试路径先读旧 meta 继承 Attempts / Created，
+// 否则退避表与 staging_max_age 全部失效（每次重试都从 0 计数 → 无限重试风暴）。
+void RV_InheritStageMetaProgress(const char[] metaPath, ReplayStageMeta meta)
+{
+    ReplayStageMeta old;
+    if (RV_ReadMeta(metaPath, old))
+    {
+        meta.Attempts = old.Attempts;
+        meta.NextRetry = old.NextRetry;
+        meta.Created = old.Created;
+        return;
+    }
+    meta.Attempts = 0;
+    meta.NextRetry = 0;
+    meta.Created = GetTime();
+}
+
+// 接力排水：从 staging 里挑一份「已到重试时间、预算可用」的最旧积压文件发出。
+// 由上传回调触发（成功/失败都会尝试），扫描器心跳兜底。每次只发一份；
+// 若发出后再有预算余量，由下一轮回调继续接力。找不到可发文件是常态（队列为空）。
+void RV_UploadNextStaged()
+{
+    if (!RV_CanUpload() || !RV_UploadBudgetAvailable()) return;
+
+    char dir[PLATFORM_MAX_PATH];
+    BuildPath(Path_SM, dir, sizeof(dir), RV_STAGING_DIR);
+    DirectoryListing listing = OpenDirectory(dir);
+    if (listing == null) return;
+
+    // 取 NextRetry 最早（含已到期）且不在 in-flight 的一份
+    char bestUuid[64], entry[PLATFORM_MAX_PATH];
+    int bestNextRetry = -1;
+    FileType fileType;
+    int now = GetTime();
+    while (listing.GetNext(entry, sizeof(entry), fileType))
+    {
+        if (fileType != FileType_File) continue;
+        int len = strlen(entry);
+        if (len <= RV_REPLAY_SUFFIX_LEN
+            || strcmp(entry[len - RV_REPLAY_SUFFIX_LEN], ".replay", false) != 0)
+        {
+            continue;
+        }
+        entry[len - RV_REPLAY_SUFFIX_LEN] = '\0'; // entry = uuid
+        if (RV_IsInFlightFresh(entry)) continue;
+
+        char metaPath[PLATFORM_MAX_PATH];
+        FormatEx(metaPath, sizeof(metaPath), "%s/%s.meta", dir, entry);
+        ReplayStageMeta meta;
+        if (!RV_ReadMeta(metaPath, meta)) continue; // 孤儿交给扫描器清理
+        if (meta.NextRetry > now) continue;
+
+        if (bestNextRetry == -1 || meta.NextRetry < bestNextRetry)
+        {
+            bestNextRetry = meta.NextRetry;
+            strcopy(bestUuid, sizeof(bestUuid), entry);
+        }
+    }
+    delete listing;
+
+    if (bestNextRetry == -1) return;
+
+    char stagingPath[PLATFORM_MAX_PATH], metaPath[PLATFORM_MAX_PATH];
+    FormatEx(stagingPath, sizeof(stagingPath), "%s/%s.replay", dir, bestUuid);
+    FormatEx(metaPath, sizeof(metaPath), "%s/%s.meta", dir, bestUuid);
+    if (!FileExists(stagingPath)) return;
+
+    ReplayStageMeta meta;
+    if (!RV_ReadMeta(metaPath, meta)) return;
+
+    if (gCV_Debug != null && gCV_Debug.BoolValue)
+        LogMessage("[replay-vault] Relay draining staged upload uuid=%s attempts=%d", bestUuid, meta.Attempts);
+
+    // 不预增 Attempts：与扫描器重试一致，计次只发生在失败回调（RV_HandleUploadFailure）；
+    // RV_UploadFile 会继承 meta 里已有的进度，发送失败按退避表顺延
+    RV_UploadFile(stagingPath, meta.Key, bestUuid, meta.Map, meta.Course, meta.SteamID64,
+        meta.Mode, meta.TimeType, meta.Date, meta.TimeMs, meta.UserId);
+}
+
 void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid,
     const char[] map, int course, const char[] steamid64, const char[] mode,
     const char[] timetype, const char[] date, int timeMs, int clientUserId)
@@ -204,6 +311,43 @@ void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid
     if (!FileExists(stagingPath))
     {
         LogError("[replay-vault] Staging file does not exist: %s", stagingPath);
+        return;
+    }
+
+    // 先落 meta 再看发送预算：预算不足时文件+meta 原样保留（Attempts/NextRetry 不动），
+    // 由扫描器与回调接力在预算恢复后发出，相当于一个平滑发送队列。
+    RV_InitUploadState();
+
+    float tickInterval = GetTickInterval();
+    int serverTickrate = tickInterval > 0.0 ? RoundToZero(1.0 / tickInterval) : 0;
+
+    char metaPath[PLATFORM_MAX_PATH];
+    RV_MetaPathOf(stagingPath, metaPath, sizeof(metaPath));
+
+    ReplayStageMeta meta;
+    strcopy(meta.Key, sizeof(meta.Key), key);
+    strcopy(meta.Map, sizeof(meta.Map), map);
+    meta.Course = course;
+    strcopy(meta.SteamID64, sizeof(meta.SteamID64), steamid64);
+    strcopy(meta.Mode, sizeof(meta.Mode), mode);
+    strcopy(meta.TimeType, sizeof(meta.TimeType), timetype);
+    strcopy(meta.Date, sizeof(meta.Date), date);
+    meta.TimeMs = timeMs;
+    meta.UserId = clientUserId;
+    RV_CategoryFromKey(key, meta.Category, sizeof(meta.Category));
+    meta.Tickrate = serverTickrate;
+
+    // 重试路径必须继承既有 Attempts / Created，否则退避表与超龄淘汰永远走不到
+    RV_InheritStageMetaProgress(metaPath, meta);
+    if (!RV_WriteMeta(metaPath, meta))
+    {
+        LogError("[replay-vault] Failed to write staging meta, upload proceeds without crash recovery: %s", metaPath);
+    }
+
+    if (!RV_UploadBudgetAvailable())
+    {
+        if (gCV_Debug != null && gCV_Debug.BoolValue)
+            LogMessage("[replay-vault] Upload deferred (budget) uuid=%s inFlight=%d", uuid, gI_InFlightCount);
         return;
     }
 
@@ -254,9 +398,7 @@ void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid
     headersOk = SteamWorks_SetHTTPRequestHeaderValue(hRequest, "X-SteamID64", steamid64) && headersOk;
 
     char tickrateStr[16];
-    float tickInterval = GetTickInterval();
-    int serverTickrate = tickInterval > 0.0 ? RoundToZero(1.0 / tickInterval) : 0;
-    if (serverTickrate > 0)
+    if (serverTickrate > 0) // 函数开头已算出（写入 meta 用），此处仅设置请求头
     {
         IntToString(serverTickrate, tickrateStr, sizeof(tickrateStr));
         headersOk = SteamWorks_SetHTTPRequestHeaderValue(hRequest, "X-Tickrate", tickrateStr) && headersOk;
@@ -284,33 +426,6 @@ void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid
         return;
     }
 
-    // 发送前写入伴生元数据并登记 in-flight：
-    // 成功 → 一并删除；失败 → 保留，交给扫描器按退避计划重试；崩溃残留 → 由扫描器兜底恢复
-    RV_InitUploadState();
-
-    ReplayStageMeta meta;
-    strcopy(meta.Key, sizeof(meta.Key), key);
-    strcopy(meta.Map, sizeof(meta.Map), map);
-    meta.Course = course;
-    strcopy(meta.SteamID64, sizeof(meta.SteamID64), steamid64);
-    strcopy(meta.Mode, sizeof(meta.Mode), mode);
-    strcopy(meta.TimeType, sizeof(meta.TimeType), timetype);
-    strcopy(meta.Date, sizeof(meta.Date), date);
-    meta.TimeMs = timeMs;
-    meta.UserId = clientUserId;
-    meta.Attempts = 0;
-    meta.NextRetry = 0;
-    meta.Created = GetTime();
-    RV_CategoryFromKey(key, meta.Category, sizeof(meta.Category));
-    meta.Tickrate = serverTickrate;
-
-    char metaPath[PLATFORM_MAX_PATH];
-    RV_MetaPathOf(stagingPath, metaPath, sizeof(metaPath));
-    if (!RV_WriteMeta(metaPath, meta))
-    {
-        LogError("[replay-vault] Failed to write staging meta, upload proceeds without crash recovery: %s", metaPath);
-    }
-
     RV_MarkInFlight(uuid);
 
     DataPack pack = new DataPack();
@@ -325,6 +440,7 @@ void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid
     pack.WriteString(steamid64);
     pack.WriteCell(course);
     pack.WriteCell(timeMs);
+    pack.WriteCell(serverTickrate); // 失败重建 meta 时需要，无需重算 tickrate
 
     if (!SteamWorks_SetHTTPRequestContextValue(hRequest, pack)
         || !SteamWorks_SetHTTPCallbacks(hRequest, RV_OnUploadCompleted))
@@ -347,7 +463,10 @@ void RV_UploadFile(const char[] stagingPath, const char[] key, const char[] uuid
         delete hRequest;
         RV_ClearInFlight(uuid);
         RV_DeleteStagedPair(stagingPath);
+        return;
     }
+
+    gI_LastUploadTime = GetTime();
 }
 
 public void RV_OnUploadCompleted(Handle hRequest, bool bFailure, bool bRequestSuccessful, EHTTPStatusCode eStatusCode, any data)
@@ -370,8 +489,9 @@ public void RV_OnUploadCompleted(Handle hRequest, bool bFailure, bool bRequestSu
     pack.ReadString(timetype, sizeof(timetype));
     pack.ReadString(date, sizeof(date));
     pack.ReadString(steamid64, sizeof(steamid64));
-    pack.ReadCell();
+    int course = pack.ReadCell();
     int timeMs = pack.ReadCell();
+    int tickrate = pack.ReadCell();
     delete pack;
 
     RV_InitUploadState();
@@ -414,13 +534,22 @@ public void RV_OnUploadCompleted(Handle hRequest, bool bFailure, bool bRequestSu
             LogError("[replay-vault]   -> 401: replay_vault_key mismatch with Worker API_KEY");
         else if (code == 400)
             LogError("[replay-vault]   -> 400: missing/invalid headers (X-UUID/X-Key/X-Map etc.)");
-        RV_HandleUploadFailure(stagingPath, key, uuid, code, bFailure || !bRequestSuccessful);
+        RV_HandleUploadFailure(stagingPath, key, uuid, map, course, steamid64, mode, timetype,
+            date, timeMs, clientUserId, tickrate, code, bFailure || !bRequestSuccessful);
     }
     delete hRequest;
+
+    // 接力排水：预算恢复（在途槽空出 / 间隔已过）时立即发出下一份积压的 staging 文件，
+    // 不必等 retry_interval 的下一轮扫描，积压得以按 upload_gap 节奏平滑排空。
+    RV_UploadNextStaged();
 }
 
-// 上传失败统一出口：决定「保留重试」还是「立即放弃」，首个失败只通知玩家一次
+// 上传失败统一出口：决定「保留重试」还是「立即放弃」，首个失败只通知玩家一次。
+// 完整的请求上下文一并传入：meta 不可读时用回调上下文重建 meta 继续重试，
+// 而不是直接删除录像（一次瞬时磁盘故障不应丢整段录像）。
 void RV_HandleUploadFailure(const char[] stagingPath, const char[] key, const char[] uuid,
+    const char[] map, int course, const char[] steamid64, const char[] mode,
+    const char[] timetype, const char[] date, int timeMs, int clientUserId, int tickrate,
     int code, bool transportError)
 {
     char metaPath[PLATFORM_MAX_PATH];
@@ -429,10 +558,30 @@ void RV_HandleUploadFailure(const char[] stagingPath, const char[] key, const ch
     ReplayStageMeta meta;
     if (!RV_ReadMeta(metaPath, meta))
     {
-        LogError("[replay-vault] Staged metadata unreadable, dropping replay uuid=%s key=%s status=%d",
+        LogError("[replay-vault] Staged metadata unreadable, rebuilding from callback context uuid=%s key=%s status=%d",
             uuid, key, code);
-        RV_DeleteStagedPair(stagingPath);
-        return;
+
+        strcopy(meta.Key, sizeof(meta.Key), key);
+        strcopy(meta.Map, sizeof(meta.Map), map);
+        meta.Course = course;
+        strcopy(meta.SteamID64, sizeof(meta.SteamID64), steamid64);
+        strcopy(meta.Mode, sizeof(meta.Mode), mode);
+        strcopy(meta.TimeType, sizeof(meta.TimeType), timetype);
+        strcopy(meta.Date, sizeof(meta.Date), date);
+        meta.TimeMs = timeMs;
+        meta.UserId = clientUserId;
+        RV_CategoryFromKey(key, meta.Category, sizeof(meta.Category));
+        meta.Tickrate = tickrate;
+        // 重建时 Attempts/Created 未知，按首次失败处理（走全额退避预算）
+        meta.Attempts = 0;
+        meta.Created = GetTime();
+        if (!RV_WriteMeta(metaPath, meta))
+        {
+            LogError("[replay-vault] Staged metadata rebuild failed (disk?), dropping replay uuid=%s metaPath=%s",
+                uuid, metaPath);
+            RV_DeleteStagedPair(stagingPath);
+            return;
+        }
     }
 
     bool firstFailure = (meta.Attempts == 0);
@@ -497,6 +646,9 @@ public Action Timer_ScanTick(Handle timer)
     RV_InitUploadState();
     if (!RV_CanUpload()) return Plugin_Continue;
 
+    // 心跳兜底排水：回调接力链中断（如积压期间无新上传）时也能推进队列
+    RV_UploadNextStaged();
+
     int now = GetTime();
     int interval = gCV_RetryInterval != null ? gCV_RetryInterval.IntValue : 60;
     if (gI_LastScanTime != 0 && now - gI_LastScanTime < interval) return Plugin_Continue;
@@ -544,8 +696,9 @@ void RV_ScanStaging(int now)
         if (RV_IsInFlightFresh(entry)) continue;
         if (gM_InFlight.ContainsKey(entry))
         {
-            // 回调疑似丢失（超过 in-flight 时限），解除占用
+            // 回调疑似丢失（超过 in-flight 时限），解除占用（计数随 ClearInFlight 一并递减）
             gM_InFlight.Remove(entry);
+            if (gI_InFlightCount > 0) gI_InFlightCount--;
         }
 
         ReplayStageMeta meta;
@@ -574,6 +727,9 @@ void RV_ScanStaging(int now)
 
         if (meta.NextRetry > now) continue;
 
+        // 与首发共用同一发送预算：在途满/间隔未到时本轮不发送，等待下一轮扫描
+        if (!RV_UploadBudgetAvailable()) continue;
+
         retried++;
         if (gCV_Debug != null && gCV_Debug.BoolValue)
             LogMessage("[replay-vault] Retrying staged upload uuid=%s attempts=%d", entry, meta.Attempts);
@@ -601,15 +757,19 @@ void RV_ScanStaging(int now)
         }
     }
 
+    int pending = replays.Length; // 供日志使用（delete 后不能再访问 Length）
     delete replays;
     delete metas;
 
     if (dropped > 0 || cleaned > 0)
     {
-        LogMessage("[replay-vault] Staging scan: retried=%d dropped=%d cleaned=%d", retried, dropped, cleaned);
+        LogMessage("[replay-vault] Staging scan: pending=%d retried=%d dropped=%d cleaned=%d",
+            pending, retried, dropped, cleaned);
     }
     else if (retried > 0 && gCV_Debug != null && gCV_Debug.BoolValue)
     {
-        LogMessage("[replay-vault] Staging scan: retried=%d dropped=%d cleaned=%d", retried, dropped, cleaned);
+        LogMessage("[replay-vault] Staging scan: pending=%d retried=%d dropped=%d cleaned=%d",
+            pending, retried, dropped, cleaned);
     }
 }
+

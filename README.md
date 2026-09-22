@@ -11,6 +11,7 @@ CS:GO GOKZ 全量录像备份插件 — 玩家**每次完成地图**（无论是
 ## 特性
 
 - 📦 **完成即上传**：每次完成地图（破服纪录 / 破 PB / 未破 PB，含 Bonus/NUB-PRO）都上传；插件自建录制器补全上游丢弃的「慢于 PB」录像，跳远/作弊同样上传，零改上游
+- 🚦 **上传节流**：全局在途请求数上限（`replay_vault_max_concurrent`）+ 相邻发送最小间隔（`replay_vault_upload_gap`），短图连刷的突发上传被摊平；积压的录像保留在 staging，由后台扫描器与回调接力按节奏平滑排空，失败按固定退避表重试直至放弃
 - 🗺️ **地图置顶键名**：`kz_map/runs/main/{steamid64}/kzt/pro/{date}_{uuid}.replay`，便于按图/人前缀查询
 - 🔑 **UUID 命名**：插件端 `UUIDv4` 生成，`X-UUID` 传 Worker，文件名为 `年.月.日.时.分.秒_uuid.replay`（北京时间，点分隔）
 - 💬 **聊天回显**：完成录像上传成功后向完成者回显 `录像已上传 UUID: xxxxxxxx-...`

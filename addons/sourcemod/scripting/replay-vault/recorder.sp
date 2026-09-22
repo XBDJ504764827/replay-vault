@@ -36,6 +36,10 @@ static float gF_RecMYaw[MAXPLAYERS + 1];
 static Handle gH_RecFinalize[MAXPLAYERS + 1];
 static bool gB_RecMovementApiOK;
 static bool gB_RecHitPerfOK;
+// 缓存的"录制器是否工作"判定：ConVar 变化时刷新。
+// OnPlayerRunCmdPost 每 tick 都会进来，禁用时必须以 O(1) 早退，不能每 tick 读 ConVar 字符串。
+static bool gB_RecHooked[MAXPLAYERS + 1];
+static bool gB_RecCaptureEnabled;
 
 // 一局完成的全部元数据；定稿时可能玩家已断开，所以必须在此刻快照。
 enum struct RV_RecPending
@@ -99,6 +103,30 @@ void RV_UpdateRecorderDeps()
     gB_RecHitPerfOK = GetFeatureStatus(FeatureType_Native, "GOKZ_GetHitPerf") == FeatureStatus_Available;
 }
 
+// ConVar/依赖变化后刷新缓存判定，并按需挂/摘 PostThink hook。
+// PostThink hook 仅用于标记 movementProcessed，录制被禁用时没必要挂在每个玩家身上。
+void RV_RecRefreshCaptureGate()
+{
+    bool enabled = RV_RecEnabled();
+    if (enabled == gB_RecCaptureEnabled) return;
+    gB_RecCaptureEnabled = enabled;
+
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (!IsValidClient(i) || IsFakeClient(i)) continue;
+        if (enabled && !gB_RecHooked[i])
+        {
+            SDKHook(i, SDKHook_PostThinkPost, RV_RecOnPostThinkPost);
+            gB_RecHooked[i] = true;
+        }
+        else if (!enabled && gB_RecHooked[i])
+        {
+            SDKUnhook(i, SDKHook_PostThinkPost, RV_RecOnPostThinkPost);
+            gB_RecHooked[i] = false;
+        }
+    }
+}
+
 void RV_InitRecorder()
 {
     RV_UpdateRecorderDeps();
@@ -109,6 +137,9 @@ void RV_InitRecorder()
         if (gA_RecPre[i] == null) gA_RecPre[i] = new ArrayList(sizeof(ReplayTickData));
         RV_RecResetClient(i);
     }
+    // ConVar 默认值已就绪（OnPluginStart 顺序：CreateConVars → InitRecorder），
+    // 这里只初始化缓存判定；hook 由 RV_RecOnClientPutInServer 按玩家挂
+    gB_RecCaptureEnabled = RV_RecEnabled();
 }
 
 void RV_ShutdownRecorder()
@@ -171,7 +202,13 @@ void RV_RecOnClientPutInServer(int client)
     if (gA_RecPost[client] == null) gA_RecPost[client] = new ArrayList(sizeof(ReplayTickData));
     if (gA_RecPre[client] == null) gA_RecPre[client] = new ArrayList(sizeof(ReplayTickData));
     RV_RecResetClient(client);
-    SDKHook(client, SDKHook_PostThinkPost, RV_RecOnPostThinkPost);
+    gB_RecHooked[client] = false;
+    // 录制被禁用时完全不挂 hook：OnPlayerRunCmdPost 仍会进，但走 O(1) 早退
+    if (gB_RecCaptureEnabled)
+    {
+        SDKHook(client, SDKHook_PostThinkPost, RV_RecOnPostThinkPost);
+        gB_RecHooked[client] = true;
+    }
 }
 
 void RV_RecOnClientDisconnect(int client)
@@ -179,7 +216,11 @@ void RV_RecOnClientDisconnect(int client)
     if (client <= 0 || client > MaxClients) return;
     // 玩家在定稿前离开：录像已经录完，直接在这里补齐并上传。
     if (gP_Rec[client].Valid) RV_RecFinishPost(client);
-    SDKUnhook(client, SDKHook_PostThinkPost, RV_RecOnPostThinkPost);
+    if (gB_RecHooked[client])
+    {
+        SDKUnhook(client, SDKHook_PostThinkPost, RV_RecOnPostThinkPost);
+        gB_RecHooked[client] = false;
+    }
     RV_RecResetClient(client);
 }
 
@@ -444,12 +485,13 @@ public void OnPlayerRunCmdPost(int client, int buttons, int impulse, const float
     const float angles[3], int weapon, int subtype, int cmdnum, int tickcount, int seed, const int mouse[2])
 {
     if (client <= 0 || client > MaxClients) return;
+    if (!gB_RecCaptureEnabled) return; // 禁用时 O(1) 早退，不做任何采集
+    if (!gB_RecMovementProcessed[client]) return;
     RV_RecCaptureTick(client, buttons, tickcount, vel, mouse);
 }
 
 void RV_RecCaptureTick(int client, int buttons, int tickCount, const float vel[3], const int mouse[2])
 {
-    if (!gB_RecMovementProcessed[client]) return;
     if (!IsValidClient(client) || IsFakeClient(client) || !IsPlayerAlive(client)) return;
     if (gB_RecPaused[client]) return;
 
@@ -674,22 +716,23 @@ bool RV_RecWriteReplayFile(int client, const char[] path, float runTime)
     for (int i = 0; i < tickCount; i++)
     {
         ticks.GetArray(i, tick);
-        ticks.GetArray(IntMax(0, i - 1), prevTick);
         RV_RecTickToArray(tick, current);
-        RV_RecTickToArray(prevTick, previous);
-
-        int deltaFlags = (1 << RPDELTA_DELTAFLAGS);
+        int deltaFlags;
         if (i == 0)
         {
             deltaFlags = (1 << RP_V2_TICK_DATA_BLOCKSIZE) - 1;
         }
         else
         {
+            // prevTick 由上一轮迭代带出，省掉每个 tick 的第二次 GetArray
+            RV_RecTickToArray(prevTick, previous);
+            deltaFlags = (1 << RPDELTA_DELTAFLAGS);
             for (int j = 1; j < sizeof(current); j++)
             {
                 if (current[j] ^ previous[j]) deltaFlags |= (1 << j);
             }
         }
+        prevTick = tick;
 
         file.WriteInt32(deltaFlags);
         for (int j = 1; j < sizeof(current); j++)

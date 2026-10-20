@@ -41,8 +41,8 @@ void RV_CreateConVars()
     gCV_RecordAll = AutoExecConfig_CreateConVar("replay_vault_record_all", "1",
         "Record every completed run inside replay-vault so runs slower than PB are uploaded too (0=only runs saved by gokz-replays)",
         _, true, 0.0, true, 1.0);
-    gCV_RecordMaxMinutes = AutoExecConfig_CreateConVar("replay_vault_record_max_minutes", "30",
-        "Max minutes of tick data the self recorder keeps per run (0=up to GOKZ RP_MAX_DURATION); longer runs are truncated",
+    gCV_RecordMaxMinutes = AutoExecConfig_CreateConVar("replay_vault_record_max_minutes", "0",
+        "Optional per-run recorder cap in minutes (0=GOKZ RP_MAX_DURATION, same as upstream; >0 truncates longer runs)",
         _, true, 0.0, true, 840.0);
     gCV_RetryInterval = AutoExecConfig_CreateConVar("replay_vault_retry_interval", "60",
         "Staging retry scan interval seconds (min 15)", _, true, 15.0, true, 3600.0);

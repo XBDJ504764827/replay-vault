@@ -75,10 +75,11 @@ bool RV_RecEnabled()
     return gCV_RecordAll != null && gCV_RecordAll.BoolValue && RV_CanUpload();
 }
 
-// 单局 tick 上限（含 pre/post），默认 30 分钟，防长局吃内存。
+// 单局 tick 上限（含 pre/post），与原版 gokz-replays 一致：
+// 默认使用 RP_MAX_DURATION（128 tick 约 14 小时）；ConVar >0 时才额外限制。
 int RV_RecMaxTicks()
 {
-    int minutes = gCV_RecordMaxMinutes != null ? gCV_RecordMaxMinutes.IntValue : 30;
+    int minutes = gCV_RecordMaxMinutes != null ? gCV_RecordMaxMinutes.IntValue : 0;
     if (minutes <= 0) return RP_MAX_DURATION;
 
     float interval = GetTickInterval();

@@ -3,7 +3,7 @@
 #endif
 #define _replay_vault_version_included_
 
-#define REPLAY_VAULT_VERSION "0.4.0"
+#define REPLAY_VAULT_VERSION "0.4.1"
 #define REPLAY_VAULT_VERSION_MAJOR 0
 #define REPLAY_VAULT_VERSION_MINOR 4
-#define REPLAY_VAULT_VERSION_PATCH 0
+#define REPLAY_VAULT_VERSION_PATCH 1
